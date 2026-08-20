@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and assemble app bundle
+        run: make app VERSION=0.16.0-fork
+
+      # actions/upload-artifact re-zips and drops symlinks, which breaks the
+      # embedded Sparkle.framework — ditto first, upload the zip.
+      - name: Zip app preserving symlinks
+        run: ditto -c -k --keepParent dist/Parrot.app Parrot-fork.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Parrot-fork
+          path: Parrot-fork.zip
+          retention-days: 14
