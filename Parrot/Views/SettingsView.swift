@@ -201,8 +201,8 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Version", value: "Parrot \(AppUpdater.currentVersion)")
-                Toggle("Keep Parrot up to date", isOn: $automaticUpdates)
+                LabeledContent("Version", value: "Scrapalot \(AppUpdater.currentVersion)")
+                Toggle("Keep Scrapalot up to date", isOn: $automaticUpdates)
                     .onChange(of: automaticUpdates) {
                         AppUpdater.shared.automaticallyUpdates = automaticUpdates
                     }
@@ -667,8 +667,8 @@ private struct HelpCircleButton: View {
         .buttonStyle(.plain)
         .animation(.easeOut(duration: 0.12), value: hovering)
         .onHover { hovering = $0 }
-        .help("Parrot Help")
-        .accessibilityLabel("Parrot Help")
+        .help("Scrapalot Help")
+        .accessibilityLabel("Scrapalot Help")
     }
 }
 

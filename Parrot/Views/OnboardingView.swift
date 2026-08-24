@@ -77,11 +77,11 @@ struct OnboardingView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(Theme.Colors.accent)
 
-            Text("Meet Parrot")
+            Text("Meet Scrapalot")
                 .font(.appLargeTitle)
                 .fontWeight(.bold)
 
-            Text("Your private, on-device meeting recorder.\nParrot listens, transcribes, and remembers — all locally on your Mac.")
+            Text("Your private, on-device meeting recorder.\nScrapalot listens, transcribes, and remembers — all locally on your Mac.")
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.ink2)
                 .multilineTextAlignment(.center)
@@ -131,9 +131,9 @@ struct OnboardingView: View {
 
     private var systemAudioPendingHint: String {
         if #available(macOS 15.0, *) {
-            return "Clicked Allow on the macOS prompt? You're set — this row turns green the first time Parrot hears meeting audio. No restart needed."
+            return "Clicked Allow on the macOS prompt? You're set — this row turns green the first time Scrapalot hears meeting audio. No restart needed."
         }
-        return "Already flipped the switch? macOS applies Screen Recording when Parrot restarts — quit and reopen Parrot, and this page will pick up right here."
+        return "Already flipped the switch? macOS applies Screen Recording when Scrapalot restarts — quit and reopen Scrapalot, and this page will pick up right here."
     }
 
     private var permissionsStep: some View {
@@ -143,7 +143,7 @@ struct OnboardingView: View {
             Text("Start with permissions")
                 .font(Theme.Typography.title())
 
-            Text("Parrot needs two macOS permissions to hear your calls. Audio only: it never sees your screen, and nothing leaves your Mac.")
+            Text("Scrapalot needs two macOS permissions to hear your calls. Audio only: it never sees your screen, and nothing leaves your Mac.")
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.ink2)
                 .multilineTextAlignment(.center)
@@ -153,8 +153,8 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 10) {
                 PermissionRow(
                     icon: "mic",
-                    askTitle: "Help Parrot hear you",
-                    grantedTitle: "Parrot can hear you",
+                    askTitle: "Help Scrapalot hear you",
+                    grantedTitle: "Scrapalot can hear you",
                     subtitle: "Microphone, your side of the call",
                     isGranted: micGranted,
                     action: {
@@ -166,8 +166,8 @@ struct OnboardingView: View {
 
                 PermissionRow(
                     icon: "speaker.wave.2",
-                    askTitle: "Help Parrot hear your meeting",
-                    grantedTitle: "Parrot can hear your meeting",
+                    askTitle: "Help Scrapalot hear your meeting",
+                    grantedTitle: "Scrapalot can hear your meeting",
                     subtitle: systemAudioSubtitle,
                     isGranted: screenGranted,
                     action: {
@@ -229,7 +229,7 @@ struct OnboardingView: View {
             Text("Choose a Model")
                 .font(Theme.Typography.title())
 
-            Text("Parrot uses WhisperKit for transcription.\nLarger models are more accurate but use more memory.")
+            Text("Scrapalot uses WhisperKit for transcription.\nLarger models are more accurate but use more memory.")
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.ink2)
                 .multilineTextAlignment(.center)
@@ -314,7 +314,7 @@ struct OnboardingView: View {
                 .font(.appLargeTitle)
                 .fontWeight(.bold)
 
-            Text("Parrot is set up. Open your next call, hit record, and the transcript stays right here on your Mac.")
+            Text("Scrapalot is set up. Open your next call, hit record, and the transcript stays right here on your Mac.")
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.ink2)
                 .multilineTextAlignment(.center)
@@ -336,8 +336,8 @@ struct OnboardingView: View {
 // MARK: - Permission Row
 
 /// One permission as a big tappable row, Anarlog-style. Ask state: a dark,
-/// full-width button phrased by outcome ("Help Parrot hear you"). Granted:
-/// an inert light row whose copy flips to the confirmation ("Parrot can hear
+/// full-width button phrased by outcome ("Help Scrapalot hear you"). Granted:
+/// an inert light row whose copy flips to the confirmation ("Scrapalot can hear
 /// you"). The subtitle keeps the real macOS permission name so people can
 /// still recognize the matching System Settings pane.
 struct PermissionRow: View {

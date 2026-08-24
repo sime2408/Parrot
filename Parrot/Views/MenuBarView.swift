@@ -43,7 +43,7 @@ struct MenuBarView: View {
 
         Divider()
 
-        Button("Open Parrot") {
+        Button("Open Scrapalot") {
             NSApp.activate(ignoringOtherApps: true)
             if let window = NSApp.windows.first(where: { $0.title != "Item-0" }) {
                 window.makeKeyAndOrderFront(nil)
@@ -52,7 +52,7 @@ struct MenuBarView: View {
 
         Divider()
 
-        Button("Quit Parrot") {
+        Button("Quit Scrapalot") {
             NSApplication.shared.terminate(nil)
         }
     }

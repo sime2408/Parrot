@@ -143,7 +143,7 @@ struct LiveRecordingView: View {
                         .foregroundStyle(Theme.Colors.warn)
                 }
                 .buttonStyle(.plain)
-                .help("Open Microphone privacy settings and enable Parrot")
+                .help("Open Microphone privacy settings and enable Scrapalot")
             }
 
             if cap.micVeryQuiet {
@@ -155,14 +155,14 @@ struct LiveRecordingView: View {
                         .foregroundStyle(Theme.Colors.warn)
                 }
                 .buttonStyle(.plain)
-                .help("Your voice reaches Parrot far below normal speech level — usually a low input volume in System Settings → Sound. Transcription still works, but accuracy improves with more signal.")
+                .help("Your voice reaches Scrapalot far below normal speech level — usually a low input volume in System Settings → Sound. Transcription still works, but accuracy improves with more signal.")
             }
 
             if cap.micSignalLost {
                 Label("mic muted by another app — reclaiming", systemImage: "mic.slash.circle.fill")
                     .font(.appCaption2)
                     .foregroundStyle(Theme.Colors.warn)
-                    .help("macOS is delivering pure silence from the microphone — usually a call app (browser meeting, Zoom) holding it. Parrot retries automatically and recovers the moment the mic frees up. Everyone else's audio keeps recording meanwhile.")
+                    .help("macOS is delivering pure silence from the microphone — usually a call app (browser meeting, Zoom) holding it. Scrapalot retries automatically and recovers the moment the mic frees up. Everyone else's audio keeps recording meanwhile.")
             }
 
             if cap.echoCancellerStarved {
@@ -319,7 +319,7 @@ struct LiveRecordingView: View {
                         if recordingManager.currentMeeting?.segments.isEmpty == true
                             && recordingManager.transcriptionEngine.currentText.isEmpty
                             && !recordingManager.transcriptionEngine.isHearingSpeech {
-                            Text("Parrot is listening...")
+                            Text("Scrapalot is listening...")
                                 .font(Theme.Typography.body)
                                 .foregroundStyle(Theme.Colors.ink3)
                                 .italic()

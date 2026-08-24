@@ -17,7 +17,7 @@ struct BugReportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Report to the Parrot repo")
+            Text("Report to the Scrapalot repo")
                 .font(Theme.Typography.title())
                 .foregroundStyle(Theme.Colors.ink)
 

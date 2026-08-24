@@ -25,7 +25,7 @@ extension Notification.Name {
 /// and the detail toolbar. Exports write to Downloads and reveal in Finder.
 @MainActor
 enum MeetingActions {
-    nonisolated static let repoURL = "https://github.com/turantekin/Parrot"
+    nonisolated static let repoURL = "https://github.com/sime2408/Parrot"
 
     static func exportTXT(_ meeting: Meeting) {
         write(ExportService.exportToTXT(meeting: meeting), for: meeting, ext: "txt")
@@ -90,7 +90,7 @@ struct ParrotCommands: Commands {
     var body: some Commands {
         // Parrot menu: custom About + a path to the next release.
         CommandGroup(replacing: .appInfo) {
-            Button("About Parrot") { MeetingActions.showAbout() }
+            Button("About Scrapalot") { MeetingActions.showAbout() }
             Button("Check for Updates…") {
                 AppUpdater.shared.checkForUpdates()
             }
@@ -158,17 +158,17 @@ struct ParrotCommands: Commands {
         // Help: the bundled Apple Help Book (searchable, offline), plus the
         // same pages on the web and the project links.
         CommandGroup(replacing: .help) {
-            Button("Parrot Help") {
+            Button("Scrapalot Help") {
                 NSApp.showHelp(nil)
             }
-            Button("Parrot Help on the Web") {
+            Button("Scrapalot Help on the Web") {
                 MeetingActions.open("https://turantekin.github.io/Parrot/help/")
             }
             Button("Show Welcome Tour") {
                 MeetingActions.showWelcomeTour()
             }
             Divider()
-            Button("Parrot on GitHub") {
+            Button("Scrapalot on GitHub") {
                 MeetingActions.open(MeetingActions.repoURL)
             }
             Button("Report a Bug…") {
