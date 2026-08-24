@@ -19,16 +19,20 @@ enum Theme {
     // MARK: - Colors
 
     enum Colors {
+        // Scrapalot palette (scrapalot-ui README_STYLE.md): zinc surfaces,
+        // blue primary, Tailwind-style status colors. Adaptive via
+        // Color(lightHex:darkHex:); text stays on system label colors so
+        // accessibility settings keep working.
         /// Main window / content background.
-        static let canvas = Color(nsColor: .textBackgroundColor)
+        static let canvas = Color(lightHex: 0xFFFFFF, darkHex: 0x09090B)
         /// Sidebar / side panels.
-        static let panel = Color(nsColor: .windowBackgroundColor)
+        static let panel = Color(lightHex: 0xF4F4F5, darkHex: 0x18181B)
         /// Chips, meters, quiet fills.
-        static let chip = Color(nsColor: .quaternaryLabelColor)
+        static let chip = Color(lightHex: 0xE4E4E7, darkHex: 0x27272A)
         /// Hairline dividers and card borders.
-        static let line = Color(nsColor: .separatorColor)
+        static let line = Color(lightHex: 0xE4E4E7, darkHex: 0x27272A)
         /// Selected row tint (accent at low opacity, like a source list).
-        static let selection = Color.accentColor.opacity(0.16)
+        static let selection = accent.opacity(0.16)
 
         /// Primary text.
         static let ink = Color(nsColor: .labelColor)
@@ -39,14 +43,14 @@ enum Theme {
         /// Section labels ("KEY POINTS") — same as ink2; callers add tracking/caps.
         static let label = Color(nsColor: .secondaryLabelColor)
 
-        /// The user's system accent — selection, links, suggested answers.
-        static let accent = Color.accentColor
+        /// Scrapalot blue primary — selection, links, suggested answers.
+        static let accent = Color(lightHex: 0x3B82F6, darkHex: 0x60A5FA)
         /// Success / action items / "listening".
-        static let good = Color(nsColor: .systemGreen)
+        static let good = Color(lightHex: 0x10B981, darkHex: 0x34D399)
         /// Unresolved: blockers, open questions, warnings.
-        static let warn = Color(nsColor: .systemOrange)
+        static let warn = Color(lightHex: 0xF59E0B, darkHex: 0xFBBF24)
         /// Recording / destructive / failures.
-        static let stop = Color(nsColor: .systemRed)
+        static let stop = Color(lightHex: 0xEF4444, darkHex: 0xF87171)
 
         // Legacy semantic names — same tokens, kept so call sites read naturally.
         static let action = good

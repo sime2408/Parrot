@@ -8,7 +8,11 @@
 
 CONFIG      ?= release
 DIST        ?= dist
-APP         := $(DIST)/Parrot.app
+# Fork branding: the bundle is Scrapalot Transcribe (no space in the file name
+# so unquoted $(APP) stays safe in recipes); executable/module stay "Parrot".
+APP_NAME    := Scrapalot Transcribe
+BUNDLE_ID   := com.scrapalot.transcribe
+APP         := $(DIST)/ScrapalotTranscribe.app
 PLIST       := $(APP)/Contents/Info.plist
 BINDIR      := .build/$(CONFIG)
 VERSION     ?= 0.0.0-dev
@@ -111,8 +115,9 @@ bundle: build
 	@printf 'APPL????' > $(APP)/Contents/PkgInfo
 	@cp Parrot/Info.plist $(PLIST)
 	@plutil -replace CFBundleExecutable         -string Parrot           $(PLIST)
-	@plutil -replace CFBundleIdentifier         -string com.uygar.parrot $(PLIST)
-	@plutil -replace CFBundleName               -string Parrot           $(PLIST)
+	@plutil -replace CFBundleIdentifier         -string $(BUNDLE_ID)     $(PLIST)
+	@plutil -replace CFBundleName               -string "$(APP_NAME)"    $(PLIST)
+	@plutil -replace CFBundleDisplayName        -string "$(APP_NAME)"    $(PLIST)
 	@plutil -replace CFBundleDevelopmentRegion  -string en               $(PLIST)
 	@plutil -replace CFBundleShortVersionString -string "$(VERSION)"     $(PLIST)
 	@plutil -replace CFBundleVersion            -string "$(BUILD_NUM)"   $(PLIST)
