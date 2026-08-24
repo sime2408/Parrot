@@ -318,6 +318,12 @@ final class OpenAICompatibleProvider: AnalysisProvider {
             "options": ["num_ctx": numCtx, "num_predict": maxTokens],
         ]
         if let schema { body["format"] = schema }
+        // Thinking models (qwen3.5+, deepseek-r1, …) spend the entire
+        // num_predict budget on hidden reasoning before the visible reply,
+        // so every call dies on done_reason "length". A live copilot needs
+        // the tokens in the answer; servers/models that reject the key get
+        // one retry without it below.
+        body["think"] = false
 
         // Native root = base URL without the /v1 suffix.
         var root = config.baseURL
@@ -344,7 +350,7 @@ final class OpenAICompatibleProvider: AnalysisProvider {
             }
         }
 
-        for attempt in 0..<2 {
+        for attempt in 0..<3 {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw AnalysisError.badResponse("No HTTP response")
@@ -354,7 +360,15 @@ final class OpenAICompatibleProvider: AnalysisProvider {
                 continue
             }
             guard http.statusCode == 200 else {
-                throw AnalysisError.badResponse(Self.errorMessage(from: data) ?? "HTTP \(http.statusCode)")
+                let message = Self.errorMessage(from: data) ?? "HTTP \(http.statusCode)"
+                // Older Ollama builds / non-thinking models can reject the
+                // "think" key — drop it and use the remaining attempt.
+                if body["think"] != nil, message.localizedCaseInsensitiveContains("think") {
+                    body.removeValue(forKey: "think")
+                    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                    continue
+                }
+                throw AnalysisError.badResponse(message)
             }
             let decoded = try JSONDecoder().decode(NativeResponse.self, from: data)
             recordNativeUsage(prompt: decoded.promptEvalCount, completion: decoded.evalCount)
