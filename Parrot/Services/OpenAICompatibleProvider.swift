@@ -190,6 +190,19 @@ final class OpenAICompatibleProvider: AnalysisProvider {
             maxTokens: 1500, config: config)
     }
 
+    func answer(question: String, transcript: String, references: [KBReference],
+                instructions: String, counterpart: String = "the other person") async throws -> String {
+        guard let config = currentConfig() else {
+            throw AnalysisError.badResponse("Copilot model not configured — check Settings → Copilot.")
+        }
+        return try await plainChat(
+            system: ClaudeAnalysisProvider.askSystemPrompt(counterpart: counterpart),
+            user: ClaudeAnalysisProvider.askUserContent(
+                question: question, transcript: transcript,
+                references: references, instructions: instructions),
+            maxTokens: 600, config: config)
+    }
+
     func coachingReport(transcript: String, talkPercentMe: Int, instructions: String,
                         counterpart: String = "the other person") async throws -> String {
         guard let config = currentConfig() else {
@@ -484,6 +497,14 @@ final class SwitchingAnalysisProvider: AnalysisProvider {
                    counterpart: String) async throws -> String {
         try await reportsProvider.summarize(transcript: transcript, insightTitles: insightTitles,
                                             instructions: instructions, counterpart: counterpart)
+    }
+
+    // A typed mid-call question is live work — route it with the live passes.
+    func answer(question: String, transcript: String, references: [KBReference],
+                instructions: String, counterpart: String) async throws -> String {
+        try await liveProvider.answer(question: question, transcript: transcript,
+                                      references: references, instructions: instructions,
+                                      counterpart: counterpart)
     }
 
     func coachingReport(transcript: String, talkPercentMe: Int, instructions: String,

@@ -25,6 +25,8 @@ enum KindResolver {
             return KindStyle(label: "Action item", color: Theme.Colors.action, iconSystemName: "checkmark.circle.fill", isPinned: false)
         case "feedback":
             return KindStyle(label: "Feedback", color: Theme.Colors.ink2, iconSystemName: "chart.line.uptrend.xyaxis", isPinned: false)
+        case "ask_answer":
+            return KindStyle(label: "Your question", color: Theme.Colors.accent, iconSystemName: "text.bubble.fill", isPinned: false)
         default:
             // Title-case the key as a last resort: "buying_signal" → "Buying Signal".
             let label = key.split(separator: "_").map { $0.capitalized }.joined(separator: " ")

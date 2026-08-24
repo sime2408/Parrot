@@ -20,6 +20,8 @@ struct CopilotPanelView: View {
     @State private var expanded: Set<UUID> = []
     /// Hero insight currently announcing itself; its glow fades after ~1.5s.
     @State private var glowingID: UUID?
+    /// The user's typed mid-call question (the Ask card).
+    @State private var askText = ""
 
     private var engine: CallAnalysisEngine { recordingManager.callAnalysisEngine }
 
@@ -166,6 +168,14 @@ struct CopilotPanelView: View {
                 .padding(.horizontal, Theme.Metrics.pad)
                 .padding(.top, 12)
 
+            // Ask the copilot anything mid-call; the answer lands as the
+            // newest (hero) card in the feed below.
+            if engine.isActive {
+                askCard
+                    .padding(.horizontal, Theme.Metrics.pad)
+                    .padding(.top, 8)
+            }
+
             if engine.insights.isEmpty && errorMessage == nil {
                 emptyState
             } else {
@@ -247,6 +257,55 @@ struct CopilotPanelView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Ask card
+
+    private func submitAsk() {
+        let question = askText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, !engine.isAsking else { return }
+        askText = ""
+        Task { await engine.ask(question) }
+    }
+
+    private var askCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.bubble.fill")
+                    .foregroundStyle(Theme.Colors.accent)
+                    .font(.appCaption)
+
+                TextField("Ask the copilot anything…", text: $askText)
+                    .textFieldStyle(.plain)
+                    .font(Theme.Typography.body)
+                    .onSubmit(submitAsk)
+                    .disabled(engine.isAsking)
+
+                if engine.isAsking {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Button(action: submitAsk) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.appCallout)
+                            .foregroundStyle(askText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? Theme.Colors.ink3 : Theme.Colors.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(askText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Answered from the recent conversation and your knowledge base")
+                }
+            }
+
+            if let error = engine.askError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.appCaption)
+                    .foregroundStyle(Theme.Colors.warn)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Colors.canvas, in: RoundedRectangle(cornerRadius: Theme.Metrics.radius))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Metrics.radius).strokeBorder(Theme.Colors.line))
     }
 
     // MARK: - Hero + history feed

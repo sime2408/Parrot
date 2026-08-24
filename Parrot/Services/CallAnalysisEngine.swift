@@ -405,6 +405,59 @@ final class CallAnalysisEngine {
         }
     }
 
+    // MARK: - Ask (user-typed mid-call question)
+
+    /// A question the user typed is answered on demand, outside the paced
+    /// analysis loop: it never queues behind the pace floor, and it works
+    /// while the copilot is paused — typing is explicit consent to send.
+    private(set) var isAsking = false
+    private(set) var askError: String?
+
+    func ask(_ question: String) async {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isActive, !trimmed.isEmpty, !isAsking else { return }
+        guard provider.isConfigured else {
+            status = .needsAPIKey
+            return
+        }
+        isAsking = true
+        askError = nil
+
+        let take = Self.windowSuffixCount(
+            times: segments.map(\.time),
+            seconds: TimeInterval(CopilotWindow.selected.minutes * 60))
+        let window = segments.suffix(take)
+        let transcript = window
+            .map { "\($0.source.label): \($0.text)" }
+            .joined(separator: "\n")
+        let anchorTime = window.last?.time ?? 0
+        // Retrieval keyed on the question itself, not on recent speech — the
+        // user may ask about something the call hasn't touched yet.
+        let profile = activeProfile
+        let references = await knowledgeBase?.search(query: trimmed, profileID: profile?.id) ?? []
+
+        do {
+            let reply = try await provider.answer(
+                question: trimmed, transcript: transcript, references: references,
+                instructions: profile?.tone ?? "",
+                counterpart: profile?.counterpart ?? "the other person")
+            guard isActive else { isAsking = false; return }
+            insights.insert(
+                Insight(kindKey: "ask_answer", title: trimmed, detail: reply,
+                        callTime: anchorTime, source: nil),
+                at: 0)
+        } catch let error as AnalysisError {
+            if case .missingAPIKey = error {
+                status = .needsAPIKey
+            } else {
+                askError = error.localizedDescription
+            }
+        } catch {
+            askError = error.localizedDescription
+        }
+        isAsking = false
+    }
+
     // MARK: - Snapshot Harness Support
 
     /// Dev-harness only: seed the engine with fake state so the copilot panel
