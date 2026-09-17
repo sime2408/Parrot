@@ -405,7 +405,10 @@ final class LiveAgent {
     /// the deadline watchdog (both on the main actor).
     @MainActor
     private final class TurnProgress {
+        /// The reply of the turn's final request (the answer, the update).
         var streamed = ""
+        /// Any token at all — the search step counts too.
+        var sawToken = false
         var live: LiveAnswer?
         var timedOut = false
     }
@@ -415,19 +418,74 @@ final class LiveAgent {
         // first real turn instead of being dropped.
         var flushed = kind == .warmup ? [] : pending
         var references: [Reference] = []
+        // Whether the documents matched at all — excerpts already sent earlier
+        // in the call are in the session, so they count as found.
+        var documentsMatched = false
+        let limit = kind == .question ? tuning.referencesPerAnswer : tuning.referencesPerUpdate
         if let retrieve, kind == .question || kind == .update {
             // Questions look up the question plus its lead-in; updates look up
             // what was just said, so the documents speak up on their own.
             let recent = flushed.suffix(kind == .question ? 3 : 8).map(\.text).joined(separator: " ")
             let query = (question?.text ?? "") + " " + recent
-            let limit = kind == .question ? tuning.referencesPerAnswer : tuning.referencesPerUpdate
-            references = Array(await retrieve(query)
-                .filter { !self.sentReferenceIDs.contains($0.id) }
-                .prefix(limit))
+            let found = await retrieve(query)
+            documentsMatched = !found.isEmpty
+            references = Array(found.filter { !self.sentReferenceIDs.contains($0.id) }.prefix(limit))
             // Lines committed while retrieval ran belong to this turn too.
             flushed = pending
         }
         guard generation == expected, !Task.isCancelled else { return }
+
+        let progress = TurnProgress()
+        progress.live = question.map {
+            LiveAnswer(question: $0.text, text: "", source: nil, callTime: $0.callTime, typed: $0.askedBy == nil)
+        }
+        if kind == .question { liveAnswer = progress.live }
+
+        // A stuck request must not hold the single Ollama slot for the call.
+        let deadline = kind.isCold ? tuning.coldFirstTokenDeadline : tuning.firstTokenDeadline
+        let turn = turnTask
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(deadline))
+            guard !Task.isCancelled, let self, self.generation == expected, !progress.sawToken else { return }
+            progress.timedOut = true
+            turn?.cancel()
+        }
+        defer { watchdog.cancel() }
+
+        // Search step: keywords missed the documents — typically a Croatian
+        // question against English files, which keyword ranking can't bridge.
+        // The model names what to look for, in both languages, and the lookup
+        // runs again. ~1 s, and only for questions whose first lookup failed.
+        if kind == .question, let question, let retrieve, !documentsMatched, !context.documentNames.isEmpty {
+            let searchLines = flushed
+            session.append(.user(Self.userMessage(
+                lines: searchLines, references: [],
+                directive: "[search] " + Self.askedLine(question)
+                    + "\nWrite: SEARCH: <keywords in English>; <the same keywords in the call's language>")))
+            pending.removeFirst(min(searchLines.count, pending.count))
+            flushed = []
+            do {
+                let (text, metrics) = try await client.stream(
+                    model: model, messages: session, options: tuning.options, maxTokens: 32
+                ) { _ in progress.sawToken = true }
+                guard generation == expected else { return }
+                session.append(.assistant(text))
+                sessionTokens = metrics.promptTokens + metrics.outputTokens
+                let keywords = LiveAgentReply.parse(text).search ?? text
+                if Self.traceEnabled {
+                    print(String(format: "LIVEAGENT search first=%.2fs total=%.2fs → %@",
+                                 metrics.firstTokenSeconds ?? -1, metrics.totalSeconds, keywords))
+                }
+                let found = await retrieve(keywords + " " + question.text)
+                documentsMatched = !found.isEmpty
+                references = Array(found.filter { !self.sentReferenceIDs.contains($0.id) }.prefix(limit))
+            } catch {
+                guard generation == expected else { return }
+                recover(kind, progress: progress, flushed: searchLines, error: error)
+                return
+            }
+            guard generation == expected, !Task.isCancelled else { return }
+        }
 
         let userContent: String
         switch kind {
@@ -438,13 +496,12 @@ final class LiveAgent {
                                            referenceCharacters: tuning.referenceCharacters,
                                            directive: "[update]")
         case .question:
-            let directive: String
-            if let question {
-                directive = question.askedBy == nil
-                    ? "[question] The user asks you: \"\(question.text)\""
-                    : "[question] Them asked: \"\(question.text)\""
-            } else {
-                directive = "[question]"
+            var directive = question.map { "[question] " + Self.askedLine($0) } ?? "[question]"
+            // Say it out loud when the documents came up empty: a 9B model
+            // otherwise fills the gap with a plausible price and a made-up
+            // file name (Croatian question vs English docs, 2026-09-17 run).
+            if retrieve != nil, !documentsMatched {
+                directive += "\n(No document excerpt matched this question.)"
             }
             userContent = Self.userMessage(lines: flushed, references: references,
                                            referenceCharacters: tuning.referenceCharacters,
@@ -462,24 +519,6 @@ final class LiveAgent {
         for reference in references { sentReferenceIDs.insert(reference.id) }
         let messages = session
 
-        let progress = TurnProgress()
-        progress.live = question.map {
-            LiveAnswer(question: $0.text, text: "", source: nil, callTime: $0.callTime, typed: $0.askedBy == nil)
-        }
-        if kind == .question { liveAnswer = progress.live }
-
-        // A stuck request must not hold the single Ollama slot for the call.
-        let deadline = kind.isCold ? tuning.coldFirstTokenDeadline : tuning.firstTokenDeadline
-        let turn = turnTask
-        let watchdog = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(deadline))
-            guard !Task.isCancelled, let self, self.generation == expected,
-                  progress.streamed.isEmpty else { return }
-            progress.timedOut = true
-            turn?.cancel()
-        }
-        defer { watchdog.cancel() }
-
         do {
             let (text, metrics) = try await client.stream(
                 model: model, messages: messages, options: tuning.options,
@@ -487,6 +526,7 @@ final class LiveAgent {
             ) { [weak self] delta in
                 guard let self, self.generation == expected else { return }
                 progress.streamed += delta
+                progress.sawToken = true
                 switch kind {
                 case .question:
                     guard var current = progress.live else { return }
@@ -521,6 +561,12 @@ final class LiveAgent {
             guard generation == expected else { return }
             recover(kind, progress: progress, flushed: flushed, error: error)
         }
+    }
+
+    private static func askedLine(_ question: QueuedQuestion) -> String {
+        question.askedBy == nil
+            ? "The user asks you: \"\(question.text)\""
+            : "Them asked: \"\(question.text)\""
     }
 
     /// A cancelled or failed turn. Whatever the model already streamed stays in
@@ -635,9 +681,13 @@ final class LiveAgent {
 
         On [update]: write NOW, then at most one ASK or NOTE, and only if useful.
         On [question]: write ANSWER first, then SOURCE if you used a document.
+        On [search]: write only one SEARCH line — keywords to find the answer in the user's documents, \
+        in English first, then the same keywords in the call's language.
         On [summarize]: write a plain summary of the call so far for your own memory — people, \
         topics, numbers, decisions, open questions — at most 150 words, no tags.
-        Never invent numbers, names or commitments that neither the call nor the documents give.
+        Prices, figures, dates, names and commitments come ONLY from the call or a <doc> excerpt \
+        you were given. If neither has them, the ANSWER says what to confirm instead of guessing. \
+        Never write a SOURCE that isn't the name of a <doc> you were given.
         """)
         parts.append(context.allowGeneralKnowledge
             ? "When the documents don't cover a question, answer from general knowledge and keep it short."
@@ -719,11 +769,12 @@ struct LiveAgentReply: Equatable {
     var answer: String?
     var notes: [String] = []
     var sources: [String] = []
+    var search: String?
     /// The reply's untagged text — summaries, or an answer whose tag the
     /// model forgot.
     var plainFallback: String?
 
-    private enum Field { case now, ask, answer, note, source }
+    private enum Field { case now, ask, answer, note, source, search }
 
     private static let tags: [(names: [String], field: Field)] = [
         (["NOW", "TOPIC", "SADA", "TEMA"], .now),
@@ -731,6 +782,7 @@ struct LiveAgentReply: Equatable {
         (["ANSWER", "SAY", "REPLY", "ODGOVOR", "RECI"], .answer),
         (["NOTE", "FACT", "BILJEŠKA", "BILJESKA", "NAPOMENA"], .note),
         (["SOURCE", "SOURCES", "DOC", "IZVOR"], .source),
+        (["SEARCH", "KEYWORDS", "TRAŽI", "TRAZI"], .search),
     ]
 
     static func parse(_ text: String) -> LiveAgentReply {
@@ -748,6 +800,7 @@ struct LiveAgentReply: Equatable {
             switch field {
             case .now: reply.now = continuing ? extend(reply.now, value) : value
             case .answer: reply.answer = continuing ? extend(reply.answer, value) : value
+            case .search: reply.search = continuing ? extend(reply.search, value) : value
             case .ask:
                 if continuing, let last = reply.asks.popLast() { reply.asks.append(last + " " + value) }
                 else { reply.asks.append(value) }
