@@ -49,7 +49,7 @@ enum BugReport {
         let os = ProcessInfo.processInfo.operatingSystemVersion
         let defaults = UserDefaults.standard
         let backend = defaults.string(forKey: TranscriptionBackend.defaultsKey)
-            ?? TranscriptionBackend.local.rawValue
+            ?? TranscriptionBackend.selected.rawValue
         let copilot = defaults.bool(forKey: "copilotEnabled")
             ? (defaults.string(forKey: "copilotProvider") ?? "claude")
             : "off"

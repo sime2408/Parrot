@@ -46,9 +46,10 @@ enum CopilotProviderKind: String, CaseIterable, Identifiable {
 
 // MARK: - Ollama model catalog
 
-/// Curated local models for the Settings dropdown — small, non-"thinking"
-/// instruct models only (reasoning models like qwen3/deepseek-r1 spend minutes
-/// on hidden chain-of-thought and time out the live loop; measured 2026-07-17).
+/// Curated local models for the Settings dropdown. Thinking models are fine
+/// now: every live request turns thinking off (`think: false` natively,
+/// `reasoning_effort: "none"` on the compat endpoint) — without that, qwen3.5
+/// spent its whole budget reasoning and returned no text (2026-09-17).
 enum OllamaCatalog {
     struct Model {
         let id: String
@@ -59,6 +60,7 @@ enum OllamaCatalog {
     static let models: [Model] = [
         Model(id: "llama3.2:3b", label: "llama3.2:3b — fastest, good default", sizeLabel: "2.0 GB"),
         Model(id: "gemma3:4b", label: "gemma3:4b — better writing & languages", sizeLabel: "3.3 GB"),
+        Model(id: "qwen3.5:9b", label: "qwen3.5:9b — sharpest answers, Croatian too", sizeLabel: "6.6 GB"),
     ]
 
     static var ids: [String] { models.map(\.id) }
@@ -234,7 +236,7 @@ final class OpenAICompatibleProvider: AnalysisProvider {
     /// the schema inlined in the prompt.
     private func structuredChat(system: String, user: String, schema: [String: Any],
                                 maxTokens: Int, config: Config) async throws -> String {
-        let strictBody: [String: Any] = [
+        var strictBody: [String: Any] = [
             "model": config.model,
             "max_tokens": maxTokens,
             "messages": [
@@ -246,13 +248,19 @@ final class OpenAICompatibleProvider: AnalysisProvider {
                 "json_schema": ["name": "analysis", "strict": true, "schema": schema],
             ],
         ]
+        // Ollama's compat endpoint thinks by default on thinking models and
+        // ignores `think`; "none" is its switch. Measured on qwen3.5:9b: 400
+        // tokens of reasoning and no answer after 29 s without it, first token
+        // in 0.18 s with it. Other servers get the body untouched.
+        let isOllama = kindSource() == .ollama
+        if isOllama { strictBody["reasoning_effort"] = "none" }
         do {
             return try await send(body: strictBody, config: config)
         } catch let AnalysisError.badResponse(message) where message.contains("HTTP 4") || message.lowercased().contains("response_format") {
             // Server doesn't do strict schemas — inline it and ask for JSON mode.
             let schemaText = (try? JSONSerialization.data(withJSONObject: schema))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-            let fallbackBody: [String: Any] = [
+            var fallbackBody: [String: Any] = [
                 "model": config.model,
                 "max_tokens": maxTokens,
                 "messages": [
@@ -261,6 +269,7 @@ final class OpenAICompatibleProvider: AnalysisProvider {
                 ],
                 "response_format": ["type": "json_object"],
             ]
+            if isOllama { fallbackBody["reasoning_effort"] = "none" }
             return try await send(body: fallbackBody, config: config)
         }
     }

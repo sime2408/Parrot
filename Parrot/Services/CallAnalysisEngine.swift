@@ -107,6 +107,14 @@ final class CallAnalysisEngine {
     /// Set by RecordingManager; supplies grounded references for suggestions.
     var knowledgeBase: KnowledgeBaseService?
 
+    /// The streaming local agent. When the live provider is Ollama (and the
+    /// setting is on) it replaces the paced JSON analysis loop for the call:
+    /// one append-only session instead of a fresh multi-thousand-token prompt
+    /// per pass, which is what made local cards arrive tens of seconds late.
+    let liveAgent = LiveAgent()
+    /// True for the current call when the agent drives the copilot.
+    private(set) var usesLiveAgent = false
+
     let provider: AnalysisProvider
     private var callBrief = ""
     private var segments: [(time: TimeInterval, text: String, source: AudioSource)] = []
@@ -155,6 +163,8 @@ final class CallAnalysisEngine {
         callBrief = brief.trimmingCharacters(in: .whitespacesAndNewlines)
         isActive = true
         status = provider.isConfigured ? .listening : .needsAPIKey
+        usesLiveAgent = LiveAgentSettings.isEnabled && CopilotProviderKind.selected == .ollama
+        if usesLiveAgent { startLiveAgent(profile: profile) }
     }
 
     func stop() {
@@ -163,7 +173,78 @@ final class CallAnalysisEngine {
         debounceTask = nil
         analysisTask?.cancel()
         analysisTask = nil
+        liveAgent.stop()
+        usesLiveAgent = false
         status = .off
+    }
+
+    // MARK: - Live agent
+
+    private func startLiveAgent(profile: CallProfile?) {
+        let kb = knowledgeBase
+        let profileID = profile?.id
+        // Hand-added documents by name; folders by name and size — hundreds of
+        // file names would only dilute the session prompt.
+        var documentNames = (kb?.standaloneDocuments ?? [])
+            .filter { doc in profileID.map { doc.profileIDs.contains($0) } ?? true }
+            .map(\.name)
+        documentNames += (kb?.folders ?? []).map { "\($0.name)/ (folder, \($0.fileCount) files)" }
+
+        let context = LiveAgent.CallContext(
+            persona: profile?.persona ?? "",
+            instructions: profile?.tone ?? "",
+            counterpart: profile?.counterpart ?? "the other person",
+            brief: callBrief,
+            glossary: TranscriptionEngine.glossaryTerms(
+                from: UserDefaults.standard.string(forKey: "customVocabulary") ?? ""),
+            documentNames: documentNames,
+            allowGeneralKnowledge: profile?.allowGeneralKnowledge ?? true)
+
+        liveAgent.retrieve = { query in
+            guard let kb else { return [] }
+            return await kb.search(query: query, profileID: profileID, topK: 3).map {
+                LiveAgent.Reference(id: $0.chunkID?.uuidString ?? "\($0.documentName)#\($0.text.hashValue)",
+                                    documentName: $0.documentName, text: $0.text)
+            }
+        }
+        liveAgent.onOutput = { [weak self] output in self?.file(output) }
+        liveAgent.start(model: OpenAICompatibleProvider.ollamaModel, context: context)
+        // Folders may have changed since launch; the agent's retrieval reads
+        // the fresh index as soon as the rescan lands.
+        Task { await kb?.rescanFolders() }
+    }
+
+    /// Files a finished agent output as a card, with the same dedup rules the
+    /// JSON loop applies to its drafts.
+    private func file(_ output: LiveAgent.Output) {
+        guard isActive else { return }
+        switch output {
+        case .answer(let question, let text, let source, let callTime, let typed):
+            insights.insert(Insight(kindKey: typed ? "ask_answer" : "suggestion", title: question, detail: text,
+                                    callTime: callTime, source: validatedSource(source)), at: 0)
+        case .ask(let question, let context, let callTime):
+            guard !insights.contains(where: { $0.kindKey == "live_ask" && Self.isNearDuplicate($0.title, question) })
+            else { return }
+            insights.insert(Insight(kindKey: "live_ask", title: question,
+                                    detail: context.map { "While discussing: \($0)" } ?? "",
+                                    callTime: callTime, source: nil), at: 0)
+        case .note(let text, let source, let context, let callTime):
+            guard !insights.contains(where: { $0.kindKey == "live_note" && Self.isNearDuplicate($0.title, text) })
+            else { return }
+            insights.insert(Insight(kindKey: "live_note", title: text,
+                                    detail: context.map { "While discussing: \($0)" } ?? "",
+                                    callTime: callTime, source: validatedSource(source)), at: 0)
+        }
+    }
+
+    /// The model's SOURCE line only survives when it names a real document —
+    /// exactly, or as the file part of a folder document's path.
+    private func validatedSource(_ source: String?) -> String? {
+        guard let source = source?.trimmingCharacters(in: .whitespaces), !source.isEmpty,
+              let documents = knowledgeBase?.documents else { return nil }
+        let lowered = source.lowercased()
+        return documents.first { $0.name.lowercased() == lowered }?.name
+            ?? documents.first { $0.name.lowercased().hasSuffix("/" + lowered) }?.name
     }
 
     /// Mid-call switch, distinct from stop()/start(): cards, counters, and the
@@ -176,6 +257,11 @@ final class CallAnalysisEngine {
     func setPaused(_ paused: Bool) {
         guard isActive, paused != isPaused else { return }
         isPaused = paused
+        if usesLiveAgent {
+            liveAgent.setPaused(paused)
+            status = paused ? .paused : .listening
+            return
+        }
         if paused {
             debounceTask?.cancel()
             debounceTask = nil
@@ -209,6 +295,12 @@ final class CallAnalysisEngine {
         switch source {
         case .me: meCharacters += text.count
         case .them: themCharacters += text.count
+        }
+
+        // The agent schedules itself: questions immediately, updates batched.
+        if usesLiveAgent {
+            liveAgent.ingest(text: text, at: time, source: source)
+            return
         }
 
         // Paused: collect context, schedule nothing. setPaused(false) picks
@@ -415,6 +507,12 @@ final class CallAnalysisEngine {
 
     func ask(_ question: String) async {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        if usesLiveAgent {
+            // Streams into the live answer card; lands in the feed when done.
+            guard isActive, !trimmed.isEmpty else { return }
+            liveAgent.ask(trimmed)
+            return
+        }
         guard isActive, !trimmed.isEmpty, !isAsking else { return }
         guard provider.isConfigured else {
             status = .needsAPIKey

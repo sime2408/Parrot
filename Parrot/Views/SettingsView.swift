@@ -64,7 +64,8 @@ struct SettingsView: View {
     @AppStorage("transcriptionLanguage") private var transcriptionLanguage = "auto"
     @AppStorage("customVocabulary") private var customVocabulary = ""
     @AppStorage("echoCancellationEnabled") private var echoCancellation = true
-    @AppStorage(TranscriptionBackend.defaultsKey) private var transcriptionBackend = TranscriptionBackend.local.rawValue
+    @AppStorage(TranscriptionBackend.defaultsKey) private var transcriptionBackend = TranscriptionBackend.parakeet.rawValue
+    @AppStorage(LiveAgentSettings.enabledKey) private var copilotLiveAgent = true
     @AppStorage("polishAfterCall") private var polishAfterCall = false
     @AppStorage("livePreview") private var livePreview = true
     @State private var section: SettingsSection = .general
@@ -95,7 +96,7 @@ struct SettingsView: View {
     private var settingsFingerprint: String {
         "\(selectedModel)|\(appearance)|\(copilotEnabled)|\(transcriptionLanguage)|"
             + "\(customVocabulary)|\(echoCancellation)|\(transcriptionBackend)|\(polishAfterCall)|"
-            + "\(copilotPace)|\(copilotWindow)|\(livePreview)"
+            + "\(copilotPace)|\(copilotWindow)|\(livePreview)|\(copilotLiveAgent)"
     }
 
     private func flashSavedToast() {
@@ -252,13 +253,21 @@ struct SettingsView: View {
         Form {
             Section("Engine") {
                 Picker("Engine", selection: $transcriptionBackend) {
+                    Text("On-device Parakeet — words as they're spoken, private, free").tag(TranscriptionBackend.parakeet.rawValue)
                     Text("On-device Whisper — private, free").tag(TranscriptionBackend.local.rawValue)
                     Text("Groq cloud — big-model accuracy, ~$0.04/hr").tag(TranscriptionBackend.groq.rawValue)
                     Text("Deepgram cloud — word-by-word streaming, ~$1/hr").tag(TranscriptionBackend.deepgram.rawValue)
                 }
                 .pickerStyle(.radioGroup)
+                .onChange(of: transcriptionBackend) {
+                    // Bring the newly picked on-device engine up now, not at
+                    // the next launch — the record button waits on it.
+                    Task {
+                        await recordingManager.transcriptionEngine.loadLiveEngine(whisperModel: selectedModel)
+                    }
+                }
 
-                if transcriptionBackend == TranscriptionBackend.local.rawValue {
+                if TranscriptionBackend(rawValue: transcriptionBackend)?.isOnDevice ?? true {
                     Hint("Every second of audio stays on this Mac.")
                 } else {
                     HStack(spacing: 6) {
@@ -277,10 +286,21 @@ struct SettingsView: View {
                 Divider()
 
                 Toggle("Show words as they're spoken", isOn: $livePreview)
-                Hint("Gray preview text while someone is mid-sentence, replaced by the final line. On-device engine only; turn off if calls make your Mac run hot. Applies to the next recording.")
+                Hint("Gray preview text while someone is mid-sentence, replaced by the final line. On-device engines only; turn off if calls make your Mac run hot. Applies to the next recording.")
             }
 
-            Section("On-Device Model") {
+            if transcriptionBackend == TranscriptionBackend.parakeet.rawValue {
+                Section("Parakeet Model") {
+                    parakeetStatusView
+                    Hint("NVIDIA Parakeet TDT 0.6B v3 on the Neural Engine: a line lands about half a second after someone stops talking. 25 European languages incl. Croatian and English. Downloads once.")
+                    Button("Download / Reload Model") {
+                        Task { await recordingManager.transcriptionEngine.loadParakeet() }
+                    }
+                }
+            }
+
+            Section("Whisper Model") {
+                Hint("Runs the Whisper engine, imported recordings, and the fallback when a cloud engine or Parakeet can't.")
                 Picker("Model", selection: $selectedModel) {
                     Text("Tiny — 40 MB, fastest").tag("tiny")
                     Text("Base — 140 MB, good balance").tag("base")
@@ -347,6 +367,7 @@ struct SettingsView: View {
                 Picker("Language", selection: $transcriptionLanguage) {
                     Text("Auto-detect").tag("auto")
                     Text("English").tag("en")
+                    Text("Croatian").tag("hr")
                     Text("Turkish").tag("tr")
                     Text("Spanish").tag("es")
                     Text("German").tag("de")
@@ -369,8 +390,35 @@ struct SettingsView: View {
                     .frame(height: 64)
                     .font(Theme.Typography.secondary)
                     .overlay(RoundedRectangle(cornerRadius: Theme.Metrics.radius).strokeBorder(Theme.Colors.line))
-                Hint("Names and jargon Whisper mis-hears — comma or line separated (e.g. LaunchEase, Uygar).")
+                Hint("Names and jargon the engine mis-hears — comma or line separated (e.g. LaunchEase, Uygar). Whisper is primed with them; every engine's output gets their spelling, and the copilot knows them.")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var parakeetStatusView: some View {
+        switch recordingManager.transcriptionEngine.parakeetState {
+        case .ready:
+            Label("Model loaded and ready", systemImage: "checkmark.circle")
+                .foregroundStyle(Theme.Colors.good)
+                .font(Theme.Typography.secondary)
+        case .loading:
+            HStack(alignment: .top) {
+                ProgressView().controlSize(.small)
+                Text("Preparing Parakeet v3 — the first load compiles it for this Mac.")
+                    .font(Theme.Typography.secondary)
+                    .foregroundStyle(Theme.Colors.ink2)
+            }
+        case .downloading(let progress):
+            ModelDownloadProgressView(progress: progress, modelName: "Parakeet v3")
+        case .error(let msg):
+            Label(msg, systemImage: "xmark.circle")
+                .foregroundStyle(Theme.Colors.stop)
+                .font(Theme.Typography.secondary)
+        case .notLoaded:
+            Text("Not loaded")
+                .foregroundStyle(Theme.Colors.ink3)
+                .font(Theme.Typography.secondary)
         }
     }
 
@@ -500,12 +548,17 @@ struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .frame(maxWidth: 220)
                         }
-                        Hint("Any model from ollama.com/library — prefer small instruct models; \"thinking\" models (qwen3, deepseek-r1) are too slow for live cards.")
+                        Hint("Any model from ollama.com/library. Thinking models (qwen3.5, deepseek-r1) work — the copilot switches their thinking off.")
                     }
 
                     OllamaModelStatusView(model: copilotOllamaModel)
 
-                    Hint("Runs entirely on this Mac — free, private, no key, works offline. Expect live cards to arrive slower and read rougher than Claude's — reports are unaffected.")
+                    Toggle("Streaming live agent", isOn: $copilotLiveAgent)
+                    Hint(copilotLiveAgent
+                        ? "Answers the other side's questions the moment they finish, word by word, grounded in your knowledge folders, and keeps a live topic line. Keeps one cached session per call, so a 9B model starts answering in about a second."
+                        : "Classic cards on a timer (Pace below). Each pass re-reads the recent transcript, so local cards arrive tens of seconds late.")
+
+                    Hint("Runs entirely on this Mac — free, private, no key, works offline.")
                 case .custom:
                     LabeledContent("Server URL") {
                         TextField("", text: $copilotCustomBaseURL, prompt: Text("https://api.openai.com/v1"))
@@ -592,15 +645,51 @@ struct SettingsView: View {
 
     private var knowledgePage: some View {
         Form {
+            Section("Folders") {
+                Hint("Point the copilot at folders on this Mac — notes, docs, specs. Every readable file is indexed here, re-checked before each call, and searched live while you talk. Nothing is uploaded.")
+
+                ForEach(recordingManager.knowledgeBase.folders) { folder in
+                    KBFolderRow(folder: folder, knowledgeBase: recordingManager.knowledgeBase)
+                }
+
+                HStack {
+                    // An open panel, not a second .fileImporter: two importers
+                    // in one hierarchy fight over presentation on macOS 14.
+                    Button("Add Folder…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseDirectories = true
+                        panel.canChooseFiles = false
+                        panel.allowsMultipleSelection = false
+                        panel.prompt = "Use Folder"
+                        guard panel.runModal() == .OK, let url = panel.url else { return }
+                        Task { await recordingManager.knowledgeBase.addFolder(at: url) }
+                    }
+
+                    if !recordingManager.knowledgeBase.folders.isEmpty {
+                        Button("Rescan") {
+                            Task { await recordingManager.knowledgeBase.rescanFolders() }
+                        }
+                        .disabled(recordingManager.knowledgeBase.isIndexing)
+                    }
+
+                    if let status = recordingManager.knowledgeBase.indexingStatus {
+                        ProgressView().controlSize(.small)
+                        Text(status)
+                            .font(Theme.Typography.secondary)
+                            .foregroundStyle(Theme.Colors.ink2)
+                    }
+                }
+            }
+
             Section("Documents") {
                 Hint("The copilot grounds its answers in these and cites the source. Indexed on this Mac, never uploaded.")
 
-                if recordingManager.knowledgeBase.documents.isEmpty {
+                if recordingManager.knowledgeBase.standaloneDocuments.isEmpty {
                     Text("No documents yet")
                         .font(Theme.Typography.secondary)
                         .foregroundStyle(Theme.Colors.ink3)
                 } else {
-                    ForEach(recordingManager.knowledgeBase.documents) { document in
+                    ForEach(recordingManager.knowledgeBase.standaloneDocuments) { document in
                         KBDocumentRow(document: document, knowledgeBase: recordingManager.knowledgeBase)
                     }
                 }
@@ -628,7 +717,8 @@ struct SettingsView: View {
         }
         .fileImporter(
             isPresented: $showFileImporter,
-            allowedContentTypes: [.pdf, .plainText, .text],
+            allowedContentTypes: [.pdf, .plainText, .text, .rtf, .html,
+                                  UTType("org.openxmlformats.wordprocessingml.document") ?? .data],
             allowsMultipleSelection: true
         ) { result in
             if case .success(let urls) = result {
@@ -713,6 +803,46 @@ struct Hint: View {
             .font(Theme.Typography.secondary)
             .foregroundStyle(Theme.Colors.ink2)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Knowledge Folder Row
+
+struct KBFolderRow: View {
+    let folder: KBFolder
+    let knowledgeBase: KnowledgeBaseService
+
+    var body: some View {
+        HStack {
+            Image(systemName: "folder")
+                .foregroundStyle(Theme.Colors.ink2)
+
+            Text(folder.name)
+                .font(Theme.Typography.sans(13, .medium))
+                .lineLimit(1)
+
+            Text(detail)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.ink3)
+
+            Spacer()
+
+            Button {
+                knowledgeBase.removeFolder(folder)
+            } label: {
+                Image(systemName: "trash")
+                    .font(Theme.Typography.caption)
+            }
+            .buttonStyle(.plain)
+            .help("Stop using this folder (your files are not touched)")
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var detail: String {
+        let files = knowledgeBase.documentCount(in: folder)
+        guard let indexed = folder.lastIndexedAt else { return "\(files) files" }
+        return "\(files) files · checked \(indexed.formatted(.relative(presentation: .named)))"
     }
 }
 

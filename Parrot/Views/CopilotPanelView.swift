@@ -104,6 +104,56 @@ struct CopilotPanelView: View {
 
     @ViewBuilder
     private var statusBadge: some View {
+        if engine.usesLiveAgent {
+            liveAgentBadge
+        } else {
+            analysisStatusBadge
+        }
+    }
+
+    @ViewBuilder
+    private var liveAgentBadge: some View {
+        let agent = engine.liveAgent
+        switch agent.status {
+        case .starting:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("Warming up…").font(.appCaption).foregroundStyle(Theme.Colors.ink2)
+            }
+            .help("Loading \(agent.model) in Ollama so the first answer is fast")
+        case .listening:
+            HStack(spacing: 5) {
+                Circle().fill(Theme.Colors.good).frame(width: 7, height: 7)
+                Text("Listening").font(.appCaption).foregroundStyle(Theme.Colors.ink2)
+            }
+        case .thinking, .compacting:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text(agent.status == .compacting ? "Condensing…" : "Following…")
+                    .font(.appCaption).foregroundStyle(Theme.Colors.ink2)
+            }
+        case .answering:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("Answering…").font(.appCaption).foregroundStyle(Theme.Colors.accent)
+            }
+        case .paused:
+            HStack(spacing: 5) {
+                Circle().fill(Theme.Colors.ink3).frame(width: 7, height: 7)
+                Text("Paused").font(.appCaption).foregroundStyle(Theme.Colors.ink2)
+            }
+        case .unavailable(let message):
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.Colors.warn)
+                .font(.appCaption)
+                .help(message)
+        case .off:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var analysisStatusBadge: some View {
         switch engine.status {
         case .listening:
             HStack(spacing: 5) {
@@ -161,12 +211,19 @@ struct CopilotPanelView: View {
     @ViewBuilder
     private func feedArea(errorMessage: String?) -> some View {
         VStack(spacing: 0) {
-            // Always-on live summary: call score + one-line coach verdict +
-            // sentiment chips + open-blocker count. THE glanceable answer to
-            // "how is it going and what should I do".
-            coachCard
-                .padding(.horizontal, Theme.Metrics.pad)
-                .padding(.top, 12)
+            // Always-on live summary. With the local live agent: what the call
+            // is about right now, refreshed every few exchanges. Otherwise:
+            // call score + one-line coach verdict + sentiment chips + open-
+            // blocker count. THE glanceable answer to "what's going on".
+            Group {
+                if engine.usesLiveAgent {
+                    LiveNowCard(agent: engine.liveAgent)
+                } else {
+                    coachCard
+                }
+            }
+            .padding(.horizontal, Theme.Metrics.pad)
+            .padding(.top, 12)
 
             // Ask the copilot anything mid-call; the answer lands as the
             // newest (hero) card in the feed below.
@@ -176,12 +233,22 @@ struct CopilotPanelView: View {
                     .padding(.top, 8)
             }
 
+            // The answer being written right now — word by word, the moment
+            // the other side finishes a question.
+            if engine.usesLiveAgent, let answer = engine.liveAgent.liveAnswer {
+                LiveAnswerCard(answer: answer)
+                    .padding(.horizontal, Theme.Metrics.pad)
+                    .padding(.top, 8)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             if engine.insights.isEmpty && errorMessage == nil {
                 emptyState
             } else {
                 feed(errorMessage: errorMessage)
             }
         }
+        .animation(.easeOut(duration: 0.2), value: engine.liveAgent.liveAnswer?.id)
     }
 
     // MARK: - Coach card
@@ -250,7 +317,9 @@ struct CopilotPanelView: View {
                 .foregroundStyle(Theme.Colors.ink3)
             Text(engine.isPaused
                 ? "Copilot is paused.\nNothing is sent while paused — press play to get suggestions again."
-                : "Listening to the call.\nSuggestions, blockers and action items will appear here as the conversation unfolds.")
+                : engine.usesLiveAgent
+                    ? "Listening to the call.\nWhen someone asks you something, the answer streams in here — grounded in your knowledge folders when they cover it."
+                    : "Listening to the call.\nSuggestions, blockers and action items will appear here as the conversation unfolds.")
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.ink3)
                 .multilineTextAlignment(.center)
@@ -516,7 +585,7 @@ struct HeroInsightCard: View {
     /// Kinds whose detail is a line the user can literally say — they get the
     /// prominent Copy pill.
     private var isSayable: Bool {
-        ["suggestion", "answer", "reflection", "open_question", "follow_up_question"]
+        ["suggestion", "answer", "reflection", "open_question", "follow_up_question", "ask_answer"]
             .contains(insight.kindKey)
     }
 
@@ -787,6 +856,112 @@ struct SuggestedReplyBox: View {
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Metrics.radius)
                 .strokeBorder(Theme.Colors.line)
+        )
+    }
+}
+
+// MARK: - Live agent cards
+
+/// The live agent's summary slot: what the conversation is about right now,
+/// plus the agent's state when it isn't simply listening (warming up, Ollama
+/// not running). Replaces the coach card when the local agent drives the copilot.
+struct LiveNowCard: View {
+    let agent: LiveAgent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("NOW")
+                    .font(Theme.Typography.cap)
+                    .foregroundStyle(Theme.Colors.ink3)
+                Spacer()
+                if let latency = agent.lastAnswerLatency {
+                    Label(String(format: "%.1f s", latency), systemImage: "bolt.fill")
+                        .font(Theme.Typography.mono(11))
+                        .foregroundStyle(Theme.Colors.ink3)
+                        .help("Last answer: from the end of the question to its first word")
+                }
+            }
+
+            Text(headline)
+                .font(Theme.Typography.body)
+                .foregroundStyle(agent.nowLine == nil ? Theme.Colors.ink3 : Theme.Colors.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.opacity)
+
+            if case .unavailable(let message) = agent.status {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(Theme.Typography.secondary)
+                    .foregroundStyle(Theme.Colors.warn)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Colors.canvas, in: RoundedRectangle(cornerRadius: Theme.Metrics.radius))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Metrics.radius).strokeBorder(Theme.Colors.line))
+        .animation(.easeOut(duration: 0.25), value: agent.nowLine)
+    }
+
+    private var headline: String {
+        if let now = agent.nowLine { return now }
+        switch agent.status {
+        case .starting: return "Loading \(agent.model) — answers start as soon as it's warm."
+        case .unavailable: return "The local model isn't answering yet."
+        default: return "Listening — the topic shows here after the first exchanges."
+        }
+    }
+}
+
+/// The answer being written right now, streamed word by word. When it
+/// completes it moves into the feed as a regular card.
+struct LiveAnswerCard: View {
+    let answer: LiveAgent.LiveAnswer
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                IconChip(systemName: answer.typed ? "text.bubble.fill" : "lightbulb.fill",
+                         color: Theme.Colors.accent)
+                Text(answer.typed ? "Your question" : "Suggested answer")
+                    .font(Theme.Typography.cardTitle)
+                    .foregroundStyle(Theme.Colors.ink2)
+                Spacer()
+                if let latency = answer.firstTokenLatency {
+                    Text(String(format: "%.1f s", latency))
+                        .font(Theme.Typography.mono(11))
+                        .foregroundStyle(Theme.Colors.ink3)
+                        .help("From the end of the question to the first word of the answer")
+                } else {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+
+            Text(answer.question)
+                .font(Theme.Typography.heroTitle)
+                .foregroundStyle(Theme.Colors.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(answer.text.isEmpty ? "…" : answer.text)
+                .font(Theme.Typography.heroDetail)
+                .foregroundStyle(answer.text.isEmpty ? Theme.Colors.ink3 : Theme.Colors.ink)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let source = answer.source {
+                Label(source, systemImage: "doc.text")
+                    .font(Theme.Typography.sans(12))
+                    .foregroundStyle(Theme.Colors.ink3)
+                    .lineLimit(1)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.Colors.canvas, in: RoundedRectangle(cornerRadius: Theme.Metrics.radius))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Metrics.radius)
+                .strokeBorder(Theme.Colors.accent.opacity(0.5))
         )
     }
 }

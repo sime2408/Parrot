@@ -10,6 +10,7 @@ tree. Line counts are rough — they flag which files are worth reading whole.
 | `Parrot/ParrotApp.swift` | 112 | `@main`; parses CLI harness flags before the SwiftUI `App` starts |
 | `Parrot/ProfileTest.swift` | 363 | `--profile-test`: headless logic harness, ~60 assertions |
 | `Parrot/SnapshotTool.swift` | 522 | Offscreen PNG renderers + transcribe/analyze harnesses |
+| `Parrot/LiveLatencyChecks.swift` | 180 | Pure checks for Parakeet/live agent/KB retrieval; run by `--profile-test`, compiles without SwiftUI |
 
 ## Models (SwiftData `@Model` + Codable values)
 
@@ -20,7 +21,7 @@ tree. Line counts are rough — they flag which files are worth reading whole.
 | `Models/Insight.swift` | 60 | `CallInsight` (stored) and `Insight` (live value) |
 | `Models/CallProfile.swift` | 92 | Per-call-type prompt config: kinds, sentiment gauges |
 | `Models/KindStyle.swift` | 84 | Maps insight kinds to icon/color; `Color` helpers |
-| `Models/KnowledgeBase.swift` | 54 | KB document/chunk/reference value types |
+| `Models/KnowledgeBase.swift` | 85 | KB document/chunk/reference/folder value types |
 | `Models/AIUsage.swift` | 131 | Token accounting and per-model price table |
 | `Models/SpeakerProfile.swift` | 30 | Remembered voice: name + running-mean embedding (opt-in, local) |
 
@@ -32,13 +33,16 @@ tree. Line counts are rough — they flag which files are worth reading whole.
 | `Services/AudioCaptureManager.swift` | 700 | System audio (tap on 15+, SCK on 14.x/rescue) + mic tap, buffer conversion |
 | `Services/SystemAudioTap.swift` | 250 | Core Audio process tap: audio-only capture, no Screen Recording (macOS 15+) |
 | `Services/EchoCanceller.swift` | 138 | Swift wrapper over vendored SpeexDSP AEC |
-| `Services/TranscriptionEngine.swift` | 947 | On-device WhisperKit; `AudioSource` routing; live preview decode |
-| `Services/CloudTranscription.swift` | 355 | Opt-in Groq (batch) and Deepgram (streaming) backends + WAV encode |
+| `Services/TranscriptionEngine.swift` | 1200 | Live loop: segmenter, rolling preview, commit; Parakeet or WhisperKit per session; glossary respelling |
+| `Services/ParakeetTranscriber.swift` | 80 | FluidAudio Parakeet TDT v3 wrapper — the instant on-device engine (default) |
+| `Services/CloudTranscription.swift` | 365 | `TranscriptionBackend` enum; opt-in Groq (batch) and Deepgram (streaming) backends + WAV encode |
 | `Services/DiarizationEngine.swift` | 105 | FluidAudio offline pyannote diarization (CoreML): labels + per-speaker embeddings |
 | `Services/AnalysisProvider.swift` | 605 | `AnalysisProvider` protocol, request/result types, prompt building, **Keychain helpers** (~L575) |
 | `Services/OpenAICompatibleProvider.swift` | 528 | OpenAI-shaped LLM client (incl. Ollama); provider switching |
-| `Services/CallAnalysisEngine.swift` | 350 | Drives live Copilot + post-call report analysis passes |
-| `Services/KnowledgeBaseService.swift` | 251 | Ingests/chunks KB docs, retrieves context for prompts |
+| `Services/CallAnalysisEngine.swift` | 690 | Drives live Copilot: paced JSON passes, or the LiveAgent on Ollama; files outputs as cards |
+| `Services/LiveAgent.swift` | 800 | Streaming local agent: append-only Ollama session, questions preempt updates, tagged-line parser |
+| `Services/OllamaChatClient.swift` | 215 | Native /api/chat streaming client (think off, fixed options, metrics) |
+| `Services/KnowledgeBaseService.swift` | 700 | KB docs + folders (bookmarks, rescans), BM25 + embedding retrieval (RRF) |
 | `Services/ProfileStore.swift` | 101 | Persists and mutates `CallProfile`s |
 | `Services/ProfilePresets.swift` | 141 | Built-in starter profiles |
 | `Services/ExportService.swift` | 127 | Transcript/report export (Markdown, text) |
@@ -55,7 +59,7 @@ tree. Line counts are rough — they flag which files are worth reading whole.
 | `Views/SidebarView.swift` | 361 | Meeting list, rows, talk-ratio strip |
 | `Views/DashboardView.swift` | 329 | Landing stats + recent meetings |
 | `Views/LiveRecordingView.swift` | 549 | In-call screen: chat bubbles, mic level, side tabs |
-| `Views/CopilotPanelView.swift` | 729 | Live insight cards, pinned blockers, suggested replies |
+| `Views/CopilotPanelView.swift` | 985 | Live insight cards, pinned blockers, suggested replies; live agent NOW + streaming answer cards |
 | `Views/MeetingDetailView.swift` | 900 | Post-call tabs: transcript, insights, report; speaker naming popover + confirm card |
 | `Views/BugReportSheet.swift` | 150 | Bug/idea report form + the corner ladybug button |
 | `Views/ReportContentView.swift` | 267 | Report section cards, talk-ratio bar, prose blocks |

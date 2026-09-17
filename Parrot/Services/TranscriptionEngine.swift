@@ -24,6 +24,10 @@ enum AudioSource: CaseIterable {
 @Observable
 final class TranscriptionEngine {
     private var whisperKit: WhisperKit?
+    /// The instant live engine (TranscriptionBackend.parakeet). Loaded at launch
+    /// when selected; WhisperKit then loads lazily (file import, fallback).
+    private let parakeet = ParakeetTranscriber()
+    private var parakeetLoadTask: Task<Void, Never>?
     private var audioBuffers: [AudioSource: [Float]] = [.me: [], .them: []]
     private let bufferLock = OSAllocatedUnfairLock()
     private var transcriptionTask: Task<Void, Never>?
@@ -54,7 +58,31 @@ final class TranscriptionEngine {
     /// the tell for "the loop decoded it but a filter ate it" class of drops.
     static let loopTrace = ProcessInfo.processInfo.environment["PARROT_LOOP_TRACE"] != nil
 
-    private(set) var isReady = false
+    /// WhisperKit is loaded (the fallback engine, and the file-import engine).
+    private(set) var whisperReady = false
+    /// Parakeet download/load lifecycle, same shape as the Whisper `modelState`.
+    private(set) var parakeetState: ModelState = .notLoaded
+
+    /// Can a recording start right now? Parakeet sessions also run on a loaded
+    /// Whisper (with a notice), so either engine being up is enough there.
+    var isReady: Bool {
+        switch TranscriptionBackend.selected {
+        case .parakeet: parakeetState.isReady || whisperReady
+        case .local, .groq, .deepgram: whisperReady
+        }
+    }
+
+    /// The state of the model the NEXT recording will use — what "Ready to
+    /// record" status lines should show.
+    var liveModelState: ModelState {
+        TranscriptionBackend.selected == .parakeet ? parakeetState : modelState
+    }
+
+    /// Display name for `liveModelState`.
+    var liveModelName: String? {
+        TranscriptionBackend.selected == .parakeet ? "Parakeet v3" : loadingModelName
+    }
+
     private(set) var isTranscribing = false
     private(set) var currentText = ""
     /// Which stream `currentText` came from, so the live view can hang the
@@ -88,6 +116,11 @@ final class TranscriptionEngine {
         case loading
         case ready
         case error(String)
+
+        var isReady: Bool {
+            if case .ready = self { return true }
+            return false
+        }
     }
 
     struct TranscriptionResult {
@@ -133,7 +166,7 @@ final class TranscriptionEngine {
 
     @MainActor
     private func performLoad(_ modelName: String, generation: Int) async {
-        isReady = false
+        whisperReady = false
         loadingModelName = Self.displayName(for: modelName)
         do {
             let resolvedModelName = Self.hubVariant(for: modelName)
@@ -169,12 +202,59 @@ final class TranscriptionEngine {
             guard loadGeneration == generation else { return }
             whisperKit = kit
             modelState = .ready
-            isReady = true
+            whisperReady = true
         } catch {
             guard loadGeneration == generation, !(error is CancellationError) else { return }
             modelState = .error(error.localizedDescription)
-            isReady = false
+            whisperReady = false
         }
+    }
+
+    /// Launch-time load of whatever engine the next recording uses. Parakeet
+    /// users don't pay WhisperKit's multi-GB load and ANE compile at every
+    /// launch any more — Whisper comes up on demand (import, fallback).
+    @MainActor
+    func loadLiveEngine(whisperModel: String) async {
+        if TranscriptionBackend.selected == .parakeet {
+            await loadParakeet()
+            // First run offline, or a broken download: bring Whisper up so the
+            // record button still works (sessions fall back with a notice).
+            if case .error = parakeetState, !whisperReady {
+                await loadModel(whisperModel)
+            }
+        } else {
+            await loadModel(whisperModel)
+        }
+    }
+
+    /// Idempotent: concurrent callers share one load; a loaded model returns
+    /// immediately; a failed load can be retried by calling again.
+    @MainActor
+    func loadParakeet() async {
+        if parakeetState.isReady { return }
+        if let parakeetLoadTask {
+            await parakeetLoadTask.value
+            return
+        }
+        let task = Task { @MainActor in
+            self.parakeetState = ParakeetTranscriber.modelsInstalled ? .loading : .downloading(progress: 0)
+            do {
+                try await self.parakeet.load { fraction, compiling in
+                    Task { @MainActor [weak self] in
+                        guard let self, case .downloading(let current) = self.parakeetState else { return }
+                        // Download then compile: flip to .loading once the bytes are in.
+                        self.parakeetState = compiling ? .loading
+                            : .downloading(progress: max(current, min(max(fraction, 0), 1)))
+                    }
+                }
+                self.parakeetState = .ready
+            } catch {
+                self.parakeetState = .error("Parakeet: \(error.localizedDescription)")
+            }
+        }
+        parakeetLoadTask = task
+        await task.value
+        parakeetLoadTask = nil
     }
 
     /// UI model tags → the hub's spelling. WhisperKit downloads by globbing
@@ -386,6 +466,10 @@ final class TranscriptionEngine {
         /// Speech islands under 300 ms surrounded by silence are clicks/noise:
         /// dropped without a decode.
         static let minSpeechSamples = 4800
+        /// No preview until an utterance has 800 ms of audio: a decode of its
+        /// first syllable invents a word ("Right.", "Cool." — Parakeet at a
+        /// 0.35 s cadence, 2026-09-17 harness run) that flickers in the bubble.
+        static let minPreviewSamples = 12_800
         /// Forced cut for uninterrupted speech: bounds live latency and keeps a
         /// backlogged pass from decoding a minute as one wall of text (the old
         /// 2 s cap's job, at utterance scale). 12 s at 16 kHz.
@@ -508,6 +592,17 @@ final class TranscriptionEngine {
                 cloudNotice = "Deepgram key missing — using on-device Whisper"
             }
         }
+        // Parakeet still downloading (first run) or failed to load: this call
+        // runs on Whisper instead of waiting — a meeting never waits on a model.
+        // isReady above guarantees one of the two engines is up.
+        if backend == .parakeet, !parakeetState.isReady {
+            backend = .local
+            cloudNotice = "Parakeet isn't ready yet — using on-device Whisper"
+        }
+        let parakeetLanguage = ParakeetTranscriber.languageHint(setting: setting)
+        let glossaryTerms = Self.glossaryTerms(
+            from: UserDefaults.standard.string(forKey: "customVocabulary") ?? "")
+
         var decodeOptions = DecodingOptions(
             task: .transcribe,
             language: language,
@@ -515,8 +610,13 @@ final class TranscriptionEngine {
         )
 
         // Custom vocabulary: prime Whisper with the user's names/terms so it stops
-        // mangling proper nouns (e.g. "LaunchEase" → "Lawn Cheese").
-        primeGlossary(into: &decodeOptions)
+        // mangling proper nouns (e.g. "LaunchEase" → "Lawn Cheese"). Parakeet has
+        // no prompt; its output gets the spelling pass (respellingGlossary) only.
+        if backend == .parakeet {
+            glossaryActive = false
+        } else {
+            primeGlossary(into: &decodeOptions)
+        }
 
         // Quality + anti-garbage decoding. We derive each segment's timestamps from
         // sample offsets, so suppress Whisper's special + timestamp tokens — they were
@@ -547,9 +647,34 @@ final class TranscriptionEngine {
             // diarization sharing the die) backs off automatically instead of
             // starving the commit decodes. Toggleable in Settings; read once
             // per session like the language setting.
-            let previewBase: TimeInterval = 1.0
+            // Parakeet decodes an open utterance in tens of milliseconds, so it
+            // previews ~3× a second (same 2× backoff); Whisper keeps its 1 s.
+            let previewBase: TimeInterval = backend == .parakeet ? 0.35 : 1.0
             let previewEnabled = UserDefaults.standard.object(forKey: "livePreview") as? Bool ?? true
             var nextPreviewAt: [AudioSource: Date] = [:]
+            // The newest preview per stream: where its audio started (absolute
+            // sample index), how much it covered, and its text. A Whisper commit
+            // whose utterance that preview already covered reuses the text
+            // instead of decoding the same audio again (see the cut below).
+            var lastPreview: [AudioSource: (start: Int, count: Int, text: String)] = [:]
+            // Poll the segmenter faster when decodes are cheap: an utterance's
+            // cut lands within 100 ms of its pause instead of 250 ms.
+            let idlePoll: Duration = backend == .parakeet ? .milliseconds(100) : .milliseconds(250)
+
+            /// One on-device decode with the session's engine.
+            func decodeOnDevice(_ samples: [Float], options: DecodingOptions) async throws -> [(text: String, confidence: Float?)] {
+                if backend == .parakeet {
+                    let result = try await self.parakeet.transcribe(samples, language: parakeetLanguage)
+                    return [(result.text, result.confidence)]
+                }
+                guard let whisperKit = self.whisperKit else { return [] }
+                let result = try await whisperKit.transcribe(audioArray: samples, decodeOptions: options)
+                return result.map { transcription in
+                    (transcription.text,
+                     transcription.segments.map(\.avgLogprob).reduce(0, +)
+                        / Float(max(transcription.segments.count, 1)))
+                }
+            }
 
             while !Task.isCancelled {
                 // isTranscribing == false flips the loop into drain mode: keep
@@ -568,19 +693,22 @@ final class TranscriptionEngine {
                     // or the cap / drain forces the cut. Freeing consumed audio
                     // keeps memory flat; the counter and clock offset ride along
                     // in the same lock.
-                    let (chunk, startSample, clockOffset, floor): ([Float], Int, TimeInterval, Float) = self.bufferLock.withLock {
+                    // `bufferStart` is the absolute sample index of the buffer's
+                    // first sample before this cut — the key a preview is
+                    // matched against for reuse.
+                    let (chunk, startSample, bufferStart, clockOffset, floor): ([Float], Int, Int, TimeInterval, Float) = self.bufferLock.withLock {
                         guard let buffered = self.audioBuffers[source], !buffered.isEmpty else {
-                            return ([], 0, 0, Segmenter.silenceFloor)
+                            return ([], 0, 0, 0, Segmenter.silenceFloor)
                         }
                         let floor = Segmenter.adaptiveFloor(for: buffered)
                         let cut = Segmenter.nextCut(in: buffered, draining: draining, floor: floor)
                         let taken = cut.take.map { Array(buffered[cut.dropLeading ..< cut.dropLeading + $0]) } ?? []
                         let consumed = cut.dropLeading + taken.count
-                        guard consumed > 0 else { return ([], 0, 0, floor) }
+                        guard consumed > 0 else { return ([], 0, 0, 0, floor) }
                         self.audioBuffers[source] = Array(buffered[consumed...])
                         let start = self.consumedSamples[source] ?? 0
                         self.consumedSamples[source] = start + consumed
-                        return (taken, start + cut.dropLeading, self.localClockOffset[source] ?? 0, floor)
+                        return (taken, start + cut.dropLeading, start, self.localClockOffset[source] ?? 0, floor)
                     }
                     guard !chunk.isEmpty else {
                         // Rolling preview — the "text feels slower since
@@ -593,18 +721,19 @@ final class TranscriptionEngine {
                         // ponytail: a preview of source A delays a pending cut
                         // of source B by one decode; parallelize if dual-speech
                         // latency reports come in.
-                        if previewEnabled, backend == .local, !draining,
+                        if previewEnabled, backend.isOnDevice, !draining,
                            Date() >= nextPreviewAt[source] ?? .distantPast {
-                            let (pending, floor): ([Float], Float) = self.bufferLock.withLock {
+                            let (pending, pendingStart, floor): ([Float], Int, Float) = self.bufferLock.withLock {
                                 let buffered = self.audioBuffers[source] ?? []
-                                guard buffered.count >= Segmenter.minSpeechSamples else {
-                                    return ([], Segmenter.silenceFloor)
+                                guard buffered.count >= Segmenter.minPreviewSamples else {
+                                    return ([], 0, Segmenter.silenceFloor)
                                 }
-                                return (buffered, Segmenter.adaptiveFloor(for: buffered))
+                                return (buffered, self.consumedSamples[source] ?? 0,
+                                        Segmenter.adaptiveFloor(for: buffered))
                             }
                             let energy = pending.isEmpty ? 0
                                 : pending.reduce(into: Float(0)) { $0 += abs($1) } / Float(pending.count)
-                            if energy > floor, let whisperKit = self.whisperKit {
+                            if energy > floor, backend == .parakeet || self.whisperKit != nil {
                                 // No interim callback here on purpose: each preview
                                 // re-decodes from the utterance's start, so streaming
                                 // its words made the bubble restart the same sentence
@@ -613,13 +742,15 @@ final class TranscriptionEngine {
                                 // text; word-by-word streaming stays on the commit
                                 // decode where it reads forward, not in circles.
                                 let decodeStarted = Date()
-                                let result = (try? await whisperKit.transcribe(
-                                    audioArray: Self.normalizedForDecode(pending),
-                                    decodeOptions: decodeOptions)) ?? []
+                                let result = (try? await decodeOnDevice(
+                                    Self.normalizedForDecode(pending), options: decodeOptions)) ?? []
                                 nextPreviewAt[source] = Date().addingTimeInterval(
                                     max(previewBase, Date().timeIntervalSince(decodeStarted) * 2))
                                 let raw = Self.cleaned(result.map(\.text).joined(separator: " "))
-                                let display = self.glossaryActive ? (Self.strippingGlossaryEcho(raw) ?? "") : raw
+                                lastPreview[source] = (pendingStart, pending.count, raw)
+                                let display = Self.respellingGlossary(
+                                    self.glossaryActive ? (Self.strippingGlossaryEcho(raw) ?? "") : raw,
+                                    terms: glossaryTerms)
                                 if Self.loopTrace {
                                     // Printed even when empty: "gate never passed"
                                     // and "decoded to nothing" need different fixes.
@@ -658,25 +789,39 @@ final class TranscriptionEngine {
                     // hallucination filter reads the room, not the boosted copy.
                     let decodeSamples = Self.normalizedForDecode(chunk)
 
+                    // A Whisper preview that already decoded this whole utterance
+                    // (same buffer start; covered the speech up to the cut, and
+                    // at most the bounding pause after it) IS the commit text —
+                    // decoding the same audio again only added ~0.5–1.5 s on
+                    // large models before the line and the copilot saw it.
+                    // Parakeet re-decodes: it costs milliseconds and hears the
+                    // trimmed clip without the preview's leading silence.
+                    let speechEnd = startSample - bufferStart + chunk.count
+                    let reusablePreview: String? = {
+                        guard backend == .local, let preview = lastPreview[source],
+                              preview.start == bufferStart, !preview.text.isEmpty,
+                              preview.count >= speechEnd - Segmenter.padFrames * Segmenter.frame,
+                              preview.count <= speechEnd + Segmenter.pauseFrames * Segmenter.frame
+                        else { return nil }
+                        return preview.text
+                    }()
+                    lastPreview[source] = nil
+
                     // On-device decode — the default path, and the per-chunk
                     // fallback when a cloud backend hiccups (never lose a chunk).
                     func decodeLocally() async throws -> [(text: String, confidence: Float?)] {
-                        guard let whisperKit = self.whisperKit else { return [] }
+                        if let reusablePreview {
+                            if Self.loopTrace { print("TRACE \(source.label) commit reuses preview") }
+                            return [(reusablePreview, nil)]
+                        }
+                        guard backend == .parakeet || self.whisperKit != nil else { return [] }
                         // No interim streaming here anymore: the rolling preview is
                         // the live text, and re-streaming the same sentence from
                         // word one during the commit decode made its tail appear
                         // three times over (preview, re-stream, committed bubble —
                         // the "repeated 3 times" dry-run report, 2026-08-01).
                         func decode(_ options: DecodingOptions) async throws -> [(text: String, confidence: Float?)] {
-                            let result = try await whisperKit.transcribe(
-                                audioArray: decodeSamples,
-                                decodeOptions: options
-                            )
-                            return result.map { transcription in
-                                (transcription.text,
-                                 transcription.segments.map(\.avgLogprob).reduce(0, +)
-                                    / Float(max(transcription.segments.count, 1)))
-                            }
+                            try await decodeOnDevice(decodeSamples, options: options)
                         }
 
                         let pieces = try await decode(decodeOptions)
@@ -738,8 +883,9 @@ final class TranscriptionEngine {
                             // Prompt leak: the glossary prompt comes back as
                             // "transcription", alone or prefixed onto real
                             // speech — keep the speech, drop only the echo.
-                            guard let text = self.glossaryActive
+                            guard let unspelled = self.glossaryActive
                                 ? Self.strippingGlossaryEcho(cleaned) : cleaned else { continue }
+                            let text = Self.respellingGlossary(unspelled, terms: glossaryTerms)
 
                             await MainActor.run {
                                 // Clear the interim line — the text lives in the
@@ -768,7 +914,7 @@ final class TranscriptionEngine {
                 // call untranscribed.
                 if !didWork {
                     if draining { break }  // buffers empty → fully drained, exit
-                    try? await Task.sleep(for: .milliseconds(250))
+                    try? await Task.sleep(for: idlePoll)
                 }
             }
         }
@@ -842,20 +988,47 @@ final class TranscriptionEngine {
     /// prompt, the standard Whisper mechanism for biasing spelling.
     private func primeGlossary(into options: inout DecodingOptions) {
         glossaryActive = false
-        let vocab = (UserDefaults.standard.string(forKey: "customVocabulary") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !vocab.isEmpty, let tokenizer = whisperKit?.tokenizer else { return }
-        let terms = vocab
-            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard !terms.isEmpty else { return }
+        let terms = Self.glossaryTerms(from: UserDefaults.standard.string(forKey: "customVocabulary") ?? "")
+        guard !terms.isEmpty, let tokenizer = whisperKit?.tokenizer else { return }
         let promptText = "Glossary: " + terms.joined(separator: ", ") + "."
         let tokens = tokenizer.encode(text: " " + promptText)
             .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
         options.promptTokens = tokens
         options.usePrefillPrompt = true
         glossaryActive = true
+    }
+
+    /// The user's custom vocabulary as terms: comma or line separated, trimmed.
+    static func glossaryTerms(from vocabulary: String) -> [String] {
+        vocabulary
+            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Spelling pass for engines that take no prompt (Parakeet), and a safety
+    /// net for Whisper: a glossary term heard with its letters split by spaces,
+    /// dots or hyphens, or in the wrong case ("data tonic", "a s d l c",
+    /// "octo"), is rewritten to the user's spelling. The letters must match in
+    /// order at word boundaries, so "October" never becomes "OCTO" — and a word
+    /// the engine genuinely misheard ("Sintio") is left alone: no fuzzy
+    /// guessing inside someone's sentence. Terms under 3 letters are skipped.
+    static func respellingGlossary(_ text: String, terms: [String]) -> String {
+        guard !text.isEmpty else { return text }
+        var result = text
+        for term in terms {
+            let letters = term.filter { $0.isLetter || $0.isNumber }
+            guard letters.count >= 3 else { continue }
+            let body = letters
+                .map { NSRegularExpression.escapedPattern(for: String($0)) }
+                .joined(separator: #"[\s.\-]?"#)
+            let pattern = #"(?<![\p{L}\p{N}])"# + body + #"(?![\p{L}\p{N}])"#
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            result = regex.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result),
+                withTemplate: NSRegularExpression.escapedTemplate(for: term))
+        }
+        return result
     }
 
     /// Whisper leaks the initial prompt back as fake transcription on silent or

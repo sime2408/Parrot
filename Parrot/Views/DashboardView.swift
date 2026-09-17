@@ -171,7 +171,7 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var modelStatus: some View {
-        switch recordingManager.transcriptionEngine.modelState {
+        switch recordingManager.transcriptionEngine.liveModelState {
         case .notLoaded:
             Label("Model not loaded", systemImage: "exclamationmark.triangle")
                 .foregroundStyle(Theme.Colors.warn)
@@ -181,7 +181,7 @@ struct DashboardView: View {
                 ProgressView()
                     .controlSize(.small)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Preparing \(recordingManager.transcriptionEngine.loadingModelName ?? "WhisperKit model")…")
+                    Text("Preparing \(recordingManager.transcriptionEngine.liveModelName ?? "the transcription model")…")
                     Text("The first load can take a few minutes.")
                 }
                 .font(.appCaption)
@@ -189,7 +189,7 @@ struct DashboardView: View {
             }
         case .downloading(let progress):
             ModelDownloadProgressView(progress: progress,
-                                      modelName: recordingManager.transcriptionEngine.loadingModelName)
+                                      modelName: recordingManager.transcriptionEngine.liveModelName)
         case .ready:
             Label("Ready to record", systemImage: "checkmark.circle")
                 .foregroundStyle(Theme.Colors.good)

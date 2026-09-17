@@ -1,10 +1,14 @@
 import Foundation
 
-/// Cloud transcription backends (bring-your-own-key). On-device Whisper stays
-/// the default and the always-available fallback; these exist for users who
-/// trade "audio never leaves the Mac" for accuracy (Groq) or latency (Deepgram).
+/// Transcription backends. On-device Parakeet is the default (instant, private);
+/// on-device Whisper stays the always-available fallback. The cloud engines
+/// (bring-your-own-key) exist for users who trade "audio never leaves the Mac"
+/// for accuracy (Groq) or latency (Deepgram).
 enum TranscriptionBackend: String, CaseIterable {
-    /// On-device WhisperKit — private, free (default).
+    /// On-device Parakeet TDT v3 via FluidAudio — words while they're spoken,
+    /// 25 European languages (default).
+    case parakeet
+    /// On-device WhisperKit — private, free; honors the custom-vocabulary prompt.
     case local
     /// Groq-hosted whisper-large-v3-turbo — same chunk cadence as local, big-model
     /// accuracy, ~$0.04 per audio hour.
@@ -14,22 +18,28 @@ enum TranscriptionBackend: String, CaseIterable {
 
     static let defaultsKey = "transcriptionBackend"
 
+    /// Unset (every install before Parakeet existed) resolves to Parakeet: the
+    /// old default was "whatever on-device engine is fastest", and it now is.
     static var selected: TranscriptionBackend {
-        TranscriptionBackend(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .local
+        TranscriptionBackend(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .parakeet
     }
 
     var label: String {
         switch self {
+        case .parakeet: "On-device Parakeet"
         case .local: "On-device Whisper"
         case .groq: "Groq cloud"
         case .deepgram: "Deepgram cloud"
         }
     }
 
+    /// Runs on this Mac: no key, no per-minute cost.
+    var isOnDevice: Bool { self == .parakeet || self == .local }
+
     /// Keychain account holding this backend's API key (nil = no key needed).
     var keychainAccount: String? {
         switch self {
-        case .local: nil
+        case .parakeet, .local: nil
         case .groq: "groq-api-key"
         case .deepgram: "deepgram-api-key"
         }

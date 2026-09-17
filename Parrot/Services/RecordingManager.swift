@@ -67,13 +67,15 @@ final class RecordingManager {
         isRecording = true
     }
 
-    /// Initialize and load the default WhisperKit model
+    /// Initialize and load the live transcription engine (Parakeet by default,
+    /// or the chosen WhisperKit model), and bring knowledge folders up to date.
     func prepare(modelContext: ModelContext) async {
         self.modelContext = modelContext
         recoverInterruptedRecordings(in: modelContext)
         profileStore.seedAndMigrateIfNeeded(context: modelContext, knowledgeBase: knowledgeBase)
-        await transcriptionEngine.loadModel(
-            UserDefaults.standard.string(forKey: "whisperModel") ?? "base"
+        Task { await knowledgeBase.rescanFolders() }
+        await transcriptionEngine.loadLiveEngine(
+            whisperModel: UserDefaults.standard.string(forKey: "whisperModel") ?? "base"
         )
     }
 
@@ -359,6 +361,11 @@ final class RecordingManager {
 
         // 1. Whole-file, on-device transcription. Every segment is "Them" (one
         //    mixed track, no mic channel to tag "Me"); diarization splits it below.
+        //    Import uses Whisper's segment timestamps; with Parakeet as the live
+        //    engine, Whisper isn't loaded at launch, so load it now.
+        if !transcriptionEngine.whisperReady {
+            await transcriptionEngine.loadModel(UserDefaults.standard.string(forKey: "whisperModel") ?? "base")
+        }
         do {
             let results = try await transcriptionEngine.transcribeFile(url: audioURL)
             guard !results.isEmpty else {

@@ -78,6 +78,9 @@ targets:
         # User-picked files (knowledge base imports, audio import) + Downloads.
         com.apple.security.files.user-selected.read-write: true
         com.apple.security.files.downloads.read-write: true
+        # Knowledge folders: a security-scoped bookmark keeps a picked folder
+        # readable across launches, so it can be re-indexed before each call.
+        com.apple.security.files.bookmarks.app-scope: true
         # Sparkle's installer XPC service lives outside the sandbox so it can
         # replace the app bundle. Without these two names self-updating fails
         # silently. The downloader service isn't needed — we have network.client.

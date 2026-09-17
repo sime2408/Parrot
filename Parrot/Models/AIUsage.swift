@@ -74,13 +74,13 @@ struct AIUsage: Codable {
         let backend = TranscriptionBackend(rawValue: transcriptionBackend) ?? .local
         let billedSeconds = transcriptionSeconds * Double(transcriptionTracks)
         let transcriptionUSD: Double = switch backend {
-        case .local: 0
+        case .parakeet, .local: 0
         case .groq: billedSeconds / 3600 * AIPricing.groqUSDPerAudioHour
         case .deepgram: billedSeconds / 3600 * AIPricing.deepgramUSDPerAudioHour
         }
         items.append(LineItem(
             label: "Transcription \(backend.label)",
-            detail: backend == .local ? "on-device" : Self.compactMinutes(billedSeconds),
+            detail: backend.isOnDevice ? "on-device" : Self.compactMinutes(billedSeconds),
             usd: transcriptionUSD))
         if polishSeconds > 0 {
             items.append(LineItem(

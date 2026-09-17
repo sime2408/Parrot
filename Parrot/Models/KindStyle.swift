@@ -27,6 +27,13 @@ enum KindResolver {
             return KindStyle(label: "Feedback", color: Theme.Colors.ink2, iconSystemName: "chart.line.uptrend.xyaxis", isPinned: false)
         case "ask_answer":
             return KindStyle(label: "Your question", color: Theme.Colors.accent, iconSystemName: "text.bubble.fill", isPinned: false)
+        case "live_ask":
+            // Same warm gold as the presets' "Ask this next".
+            return KindStyle(label: "Ask this next", color: KindResolver.adaptiveColor(forHex: "C29218"),
+                             iconSystemName: "questionmark.bubble.fill", isPinned: false)
+        case "live_note":
+            return KindStyle(label: "From your documents", color: KindResolver.adaptiveColor(forHex: "2F7E96"),
+                             iconSystemName: "doc.text.magnifyingglass", isPinned: false)
         default:
             // Title-case the key as a last resort: "buying_signal" → "Buying Signal".
             let label = key.split(separator: "_").map { $0.capitalized }.joined(separator: " ")

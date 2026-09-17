@@ -40,6 +40,7 @@ enum ProfileTest {
         testDiarizedLabel()
         testSpeakerNames()
         testVoiceProfiles()
+        LiveLatencyChecks.run { name, ok in check(name, ok) }
         print(failures == 0 ? "ALL PASS" : "FAILURES: \(failures)")
         exit(failures == 0 ? 0 : 1)
     }
