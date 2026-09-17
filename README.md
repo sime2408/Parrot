@@ -26,10 +26,10 @@ If you find this useful or just think the idea is cool, give it a star. It'll ma
 
 - **Records system audio + microphone** — Captures what everyone says in a meeting (via ScreenCaptureKit) plus your own voice
 - **Knows who said what** — On-device speaker detection tells the people on the call apart. Name each voice once from short clips, and the transcript, reports, and coaching all use real names. Turn on **Remember voices** and Parrot suggests who's talking on the next call. Free and fully local. (Meetily charges $10/month for diarization; Anarlog $15/month, via the cloud.)
-- **Real-time transcription, your choice of engine** — On-device WhisperKit by default (private, free). Or bring your own key for **Groq** (big-model accuracy for ~$0.04/hr) or **Deepgram** (true streaming — words appear ~300 ms after they're spoken). Cloud engines fall back to on-device automatically if anything fails mid-call
+- **Real-time transcription, your choice of engine** — On-device **Parakeet** by default (private, free): a line lands about half a second after someone stops talking, and words fill in while they're still speaking, in 25 European languages. On-device WhisperKit stays one click away. Or bring your own key for **Groq** (big-model accuracy for ~$0.04/hr) or **Deepgram** (true streaming — words appear ~300 ms after they're spoken). Cloud engines fall back to on-device automatically if anything fails mid-call
 - **Transcripts read like people talk** — Lines land as whole sentences when the speaker pauses (not chopped 2-second fragments), with a live preview filling in while they're still mid-sentence. Silence is never transcribed
 - **Post-call polish pass (optional)** — After you hit Stop, re-transcribe the whole call through Groq's large model and regenerate the reports from the cleaner text, for pennies
-- **Live Call Copilot** — An always-on assistant that watches the conversation: a live coach card with a 0–100 "how is this call going" score, suggested answers grounded in *your* documents, pinned blocker/question cards that auto-resolve when you handle them, and action items captured as you promise them. Opt-in, and you pick the brain: **Claude** (bring your own key), a **local model via Ollama** (fully offline AI), or any OpenAI-compatible server. Transcript text goes to your chosen provider, audio never leaves your Mac
+- **Live Call Copilot** — An always-on assistant that watches the conversation: a live coach card with a 0–100 "how is this call going" score, suggested answers grounded in *your* documents, pinned blocker/question cards that auto-resolve when you handle them, and action items captured as you promise them. Opt-in, and you pick the brain: **Claude** (bring your own key), a **local model via Ollama** (fully offline AI — runs as a streaming live agent that answers the other side's questions about a second after they finish, word by word), or any OpenAI-compatible server. Transcript text goes to your chosen provider, audio never leaves your Mac
 - **You control what the Copilot spends** — A pace setting (Relaxed fits free model tiers), a dial for how much conversation each request carries, and a pause button right on the call screen: while paused, nothing is sent and nothing is spent
 - **Call Profiles** — Reshape the copilot per call type (sales discovery, 1:1 coaching, interviews…): each profile has its own insight kinds, sentiment gauges, persona, and tone
 - **Per-call AI cost transparency** — Every meeting shows what the AI actually cost: model, tokens, calls, transcription minutes, and estimated dollars, with a line-by-line breakdown. Local features show $0.00, proudly
@@ -46,11 +46,12 @@ If you find this useful or just think the idea is cool, give it a star. It'll ma
 | What | How |
 |------|-----|
 | UI | SwiftUI, native macOS (no Electron!) |
-| Speech-to-Text (default) | [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device, runs on Neural Engine |
+| Speech-to-Text (default) | NVIDIA Parakeet TDT 0.6B v3 via [FluidAudio](https://github.com/FluidInference/FluidAudio) — on-device, Neural Engine, ~460 MB on first use |
+| Speech-to-Text (on-device alternative, file import) | [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device, runs on Neural Engine |
 | Speech-to-Text (optional, BYO key) | Groq `whisper-large-v3-turbo` (HTTP chunks) · Deepgram Nova-3 (websocket streaming) |
 | Speaker detection | [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache-2.0) — on-device pyannote-derived models (CC-BY-4.0), ~13 MB downloaded on first use |
 | Copilot & reports (optional, BYO key) | Claude API (Haiku) with structured outputs |
-| Knowledge base | Apple NaturalLanguage embeddings — documents chunked & embedded on-device, never uploaded |
+| Knowledge base | Documents and whole folders indexed on-device (keyword BM25 + Apple NaturalLanguage embeddings), re-checked before each call, never uploaded |
 | System Audio | ScreenCaptureKit (no virtual audio drivers needed) |
 | Microphone | AVAudioEngine |
 | Storage | SwiftData + SQLite |

@@ -879,7 +879,7 @@ struct LiveNowCard: View {
                     Label(String(format: "%.1f s", latency), systemImage: "bolt.fill")
                         .font(Theme.Typography.mono(11))
                         .foregroundStyle(Theme.Colors.ink3)
-                        .help("Last answer: from the end of the question to its first word")
+                        .help("Last answer: from the transcribed question to the answer's first word")
                 }
             }
 
@@ -932,7 +932,7 @@ struct LiveAnswerCard: View {
                     Text(String(format: "%.1f s", latency))
                         .font(Theme.Typography.mono(11))
                         .foregroundStyle(Theme.Colors.ink3)
-                        .help("From the end of the question to the first word of the answer")
+                        .help("From the transcribed question to the answer's first word")
                 } else {
                     ProgressView().controlSize(.mini)
                 }

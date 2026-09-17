@@ -253,6 +253,17 @@ final class LiveAgent {
         }
     }
 
+    /// Dev-harness only: put the agent in a mid-call state so its cards can be
+    /// rendered offscreen (`--copilot-snapshot`) without Ollama.
+    func seedForSnapshot(model: String, now: String?, liveAnswer: LiveAnswer?,
+                         lastAnswerLatency: TimeInterval?, status: Status = .answering) {
+        self.model = model
+        nowLine = now
+        self.liveAnswer = liveAnswer
+        self.lastAnswerLatency = lastAnswerLatency
+        self.status = status
+    }
+
     // MARK: - Input
 
     /// Every committed transcript line. Questions from the other side go

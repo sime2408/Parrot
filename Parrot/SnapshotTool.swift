@@ -536,7 +536,39 @@ enum CopilotSnapshot {
         let bubblesURL = render(bubbles, dark: false,
                                 to: (path as NSString).deletingPathExtension + "-bubbles.png")
 
-        FileHandle.standardError.write(Data("copilot-snapshot: wrote \(light.path) + \(dark.path) + \(rows.path) + \(legendURL.path) + \(bubblesURL.path)\n".utf8))
+        // Live agent cards (Ollama): NOW line, an answer mid-stream, and the
+        // two card kinds the agent files — rendered for light and dark.
+        let agent = LiveAgent()
+        agent.seedForSnapshot(
+            model: "qwen3.5:9b",
+            now: "BigQuery reservation costs after the cutover",
+            liveAnswer: LiveAgent.LiveAnswer(
+                question: "Koliko će koštati rezervacija nakon prelaska?",
+                text: "Oko 4.100 USD mjesečno na rezervaciji od 500 slotova, uz odobrenje financija.",
+                source: "Docs/bigquery-costs.md", callTime: 612, typed: false, firstTokenLatency: 0.6),
+            lastAnswerLatency: 0.5)
+        let agentAsk = Insight(kindKey: "live_ask", title: "Who signs off on the reservation commitment?",
+                               detail: "While discussing: BigQuery reservation costs after the cutover",
+                               callTime: 590, source: nil)
+        let agentNote = Insight(kindKey: "live_note",
+                                title: "A domain can't cut over before the ASDLC review passes (Tuesdays).",
+                                detail: "While discussing: go-live review", callTime: 575,
+                                source: "Docs/specs/asdlc-review.md")
+        let agentCards = VStack(spacing: 8) {
+            LiveNowCard(agent: agent)
+            LiveAnswerCard(answer: agent.liveAnswer!)
+            HeroInsightCard(insight: agentAsk, kindStyle: KindResolver.fallbackStyle(forKey: "live_ask"),
+                            isGlowing: false, onJump: {}, onDismiss: {})
+            InsightCard(insight: agentNote, kindStyle: KindResolver.fallbackStyle(forKey: "live_note"),
+                        isCollapsed: false, onToggleCollapse: {}, onJump: {}, onDismiss: {})
+        }
+        .padding(12)
+        .frame(width: 420)
+        .background(Theme.Colors.panel)
+        let agentURL = render(agentCards, dark: false, to: (path as NSString).deletingPathExtension + "-agent.png")
+        _ = render(agentCards, dark: true, to: (path as NSString).deletingPathExtension + "-agent-dark.png")
+
+        FileHandle.standardError.write(Data("copilot-snapshot: wrote \(light.path) + \(dark.path) + \(rows.path) + \(legendURL.path) + \(bubblesURL.path) + \(agentURL.path)\n".utf8))
         exit(0)
     }
 
