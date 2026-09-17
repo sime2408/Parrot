@@ -168,6 +168,11 @@ final class CallAnalysisEngine {
     }
 
     func stop() {
+        // An answer still streaming when the call ends belongs in the report.
+        if usesLiveAgent, let partial = liveAgent.liveAnswer, !partial.text.isEmpty {
+            file(.answer(question: partial.question, text: partial.text, source: partial.source,
+                         callTime: partial.callTime, typed: partial.typed))
+        }
         isActive = false
         debounceTask?.cancel()
         debounceTask = nil

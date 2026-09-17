@@ -511,7 +511,7 @@ final class LiveAgent {
             // Say it out loud when the documents came up empty: a 9B model
             // otherwise fills the gap with a plausible price and a made-up
             // file name (Croatian question vs English docs, 2026-09-17 run).
-            if retrieve != nil, !documentsMatched {
+            if retrieve != nil, !documentsMatched, !context.documentNames.isEmpty {
                 directive += "\n(No document excerpt matched this question.)"
             }
             userContent = Self.userMessage(lines: flushed, references: references,
