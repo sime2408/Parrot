@@ -54,6 +54,17 @@ ifeq ($(strip $(SIGN_IDENTITY)),)
 SIGN_IDENTITY := -
 endif
 
+# Hardened runtime only with a real identity. Its library validation compares
+# Team IDs, and an ad hoc bundle has none to match: on macOS 26 an ad hoc app
+# signed with --options runtime dies in dyld before main, rejecting its own ad
+# hoc Sparkle.framework ("mapping process and mapped file (non-platform) have
+# different Team IDs") — every CI build (always ad hoc) did, 2026-09-17.
+ifeq ($(SIGN_IDENTITY),-)
+RUNTIME_FLAG :=
+else
+RUNTIME_FLAG := --options runtime
+endif
+
 .DEFAULT_GOAL := app
 
 .PHONY: help
@@ -156,8 +167,8 @@ bundle: build
 		"$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" \
 		"$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
 		"$(APP)/Contents/Frameworks/Sparkle.framework"; do \
-		codesign --force --options runtime --timestamp=none --sign "$(SIGN_IDENTITY)" "$$nested" || exit 1; done
-	codesign --force --options runtime --timestamp=none \
+		codesign --force $(RUNTIME_FLAG) --timestamp=none --sign "$(SIGN_IDENTITY)" "$$nested" || exit 1; done
+	codesign --force $(RUNTIME_FLAG) --timestamp=none \
 		--entitlements Parrot/Parrot.entitlements \
 		--sign "$(SIGN_IDENTITY)" $(APP)
 	@# --deep on verify (not sign) walks nested code and fails loudly if any
